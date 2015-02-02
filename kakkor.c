@@ -1,9 +1,23 @@
 #include <stdio.h>
 #include <string.h>
 #include <malloc.h>
+#include <time.h>
 
-typedef enum {MODE_OFF = 0, MODE_CHARGE, MODE_DISCHARGE} mode_t;
+typedef enum {MODE_OFF = 0, MODE_CHARGE, MODE_DISCHARGE, MODE_CHA_DSCH, MODE_DSCH_CHA} mode_t;
+
+const char* mode_names[5] = {"MODE_OFF", "MODE_CHARGE", "MODE_DISCHARGE", "MODE_CHARGE_TO_DISCHARGE", "MODE_DISCHARGE_TO_CHARGE"};
+const char* short_mode_names[5] = {"OFF", "CHA", "DSCH", "CHA2DSCH", "DSCH2CHA"};
+
 typedef enum {STOP_MODE_UNDEFINED = 0, STOP_MODE_CURRENT, STOP_MODE_VOLTAGE} stop_mode_t;
+
+const char* stop_mode_names[3] = {"UNDEFINED", "CURRENT STOP", "VOLTAGE STOP"};
+const char* short_stop_mode_names[3] = {"UNDEF", "ISTOP", "VSTOP"};
+
+typedef enum {CCCV_UNDEFINED, MODE_CC, MODE_CV} cccv_t;
+const char* short_cccv_names[3] = {"UNDEF", "CC", "CV"};
+
+
+const char* delim = ";\t";
 
 #define MAX_PARALLEL_CHANNELS 32
 #define MIN_ID 0
@@ -26,17 +40,66 @@ typedef struct
 	int stop_voltage;
 } hw_base_settings_t;
 
+typedef struct
+{
+	int voltage;
+	int current;
+	int temperature;
+	int is_cv;
+	mode_t mode;
+	cccv_t cccv;
+} hw_measurement_t;
+
+typedef struct
+{
+	hw_measurement_t hwmeas[MAX_PARALLEL_CHANNELS];
+	double voltage;
+	double current;
+	double temperature;
+	mode_t mode;
+	cccv_t cccv;
+	double cumul_ah;
+	double cumul_wh;
+	double resistance;
+} measurement_t;
 
 typedef struct
 {
 	char* name;
 	int num_channels;
 	int channels[MAX_PARALLEL_CHANNELS];
+
+	// List of channels to be averaged to the final voltage reading.
+	// If no sense wires are used, best to average all channels in parallel
+	// If sense wires are used, choose all channels that use them (typically 1 for lazy installation).
+	int num_voltchannels;
+	int voltchannels[MAX_PARALLEL_CHANNELS];
+
 	base_settings_t charge;
 	base_settings_t discharge;
 	hw_base_settings_t hw_charge;
 	hw_base_settings_t hw_discharge;
+
+	mode_t start_mode;
+	int start_time;
+	int postcharge_cooldown;
+	int postdischarge_cooldown;
+	int postcharge_cooldown_start_time;
+	int postdischarge_cooldown_start_time;
+
+	int cycle_cnt;
+	mode_t cur_mode;
+	FILE* log;
+	FILE* verbose_log;
+
 } test_t;
+
+void log_measurement(measurement_t* m, test_t* t, int time)
+{
+	fprintf(t->log, "%u%s%s%s%s%s%.3f%s%.2f%s%.1f%s%.3f%s%.3f%s%.2f",
+		time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
+		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance);
+}
 
 void print_params(test_t* params)
 {
@@ -44,10 +107,10 @@ void print_params(test_t* params)
 	printf("%u parallel channels: ", params->num_channels);
 	for(i = 0; i < params->num_channels; i++)
 		printf("%u  ", params->channels[i]);
-	printf("\nCHARGE: current=%.3f   voltage=%.3f   stop_mode=%u   stop_current=%.3f   stop_voltage=%.3f\n",
-		params->charge.current, params->charge.voltage, params->charge.stop_mode, params->charge.stop_current, params->charge.stop_voltage);
-	printf("DISCHARGE: current=%.3f   voltage=%.3f   stop_mode=%u   stop_current=%.3f   stop_voltage=%.3f\n",
-		params->discharge.current, params->discharge.voltage, params->discharge.stop_mode, params->discharge.stop_current, params->discharge.stop_voltage);
+	printf("\nCHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
+		params->charge.current, params->charge.voltage, short_stop_mode_names[params->charge.stop_mode], params->charge.stop_current, params->charge.stop_voltage);
+	printf("DISCHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
+		params->discharge.current, params->discharge.voltage, short_stop_mode_names[params->discharge.stop_mode], params->discharge.stop_current, params->discharge.stop_voltage);
 
 	printf("HW CHARGE: current=%d   stopcurrent=%d   voltage=%d   stopvoltage=%d\n",
 		params->hw_charge.current, params->hw_charge.stop_current, params->hw_charge.voltage, params->hw_charge.stop_voltage);
@@ -55,6 +118,8 @@ void print_params(test_t* params)
 	printf("HW DISCHARGE: current=%d   stopcurrent=%d   voltage=%d   stopvoltage=%d\n",
 		params->hw_discharge.current, params->hw_discharge.stop_current, params->hw_discharge.voltage, params->hw_discharge.stop_voltage);
 
+	printf("cycling_start=%s   postcharge_cooldown=%u sec   postdischarge_cooldown=%u sec\n",
+		mode_names[params->start_mode], params->postcharge_cooldown, params->postdischarge_cooldown);
 }
 
 void uart_flush()
@@ -70,6 +135,118 @@ void comm_send(char* buf)
 int comm_expect(char* buf)
 {
 	return 0;
+}
+
+
+void aread(int fd, char* buf, int n)
+{
+	static int jutska = 0;
+	switch(jutska)
+	{
+		case 0:
+		strcpy(buf, "kakkenpis sen vir\ntsen:629"); break;
+		case 1:
+		strcpy(buf, "johannes;@1:VMEAS=123 IMEAS=45"); break;
+		case 2:
+		strcpy(buf, "6 TMEAS=789"); break;
+		case 3:
+		strcpy(buf, ";asfgdashjughaeghu;gta"); break;
+		default: break;
+	}
+
+	jutska++;
+}
+
+
+int read_reply(int fd, char *outbuf, char* expect_header, char* expect_footer, int maxbytes, int flush)
+{
+	static char old_readbuf[200];
+	char readbuf[200];
+	char* p_readbuf;
+
+	if(flush)
+	{
+		uart_flush();
+		old_readbuf[0] = 0;
+	}
+
+	while(1)
+	{
+		// Read as long as we get our expected header.
+		if(old_readbuf[0] != 0)
+		{
+			// We have surpluss stuff from the previous read, process that first
+			
+		}
+		else
+		{
+			aread(fd, readbuf, 199);
+			printf("read1: %s\n", readbuf);
+		}
+		if(p_readbuf = strstr(readbuf, expect_header))
+		{
+			p_readbuf += strlen(expect_header);
+			// Got the header; read as long as we get the footer.
+			while(1)
+			{
+				char* p_footer;
+				if(p_footer = strstr(p_readbuf, expect_footer))
+				{
+					// Found the footer.
+					int size = p_footer - p_readbuf;
+					if(size < 0)
+						return 1;
+					if(size >= maxbytes)
+						return 2;
+					size++;
+					if(size > maxbytes)
+						return 4;
+					*p_footer = 0;
+					strcpy(outbuf, p_readbuf);
+					return 0;
+				}
+
+				// Didn't found the footer yet, copy what we have
+				// and read more.
+				int size = strlen(p_readbuf);
+				if(size >= maxbytes)
+					return 3;
+				maxbytes -= size;
+				printf("strcpy %s\n", p_readbuf);
+				strcpy(outbuf, p_readbuf);
+				outbuf+=size;
+				usleep(1000);
+				aread(fd, readbuf, 199);
+				printf("read2: %s\n", readbuf);
+				p_readbuf = readbuf;
+			}
+
+		}
+
+		if(old_readbuf[0] == 0)
+			usleep(1000); // we did a read and did not get everything - wait for more data.
+
+		old_readbuf[0] = 0;
+
+	}
+
+	return 0;
+}
+
+int measure_hw(int fd, test_t* test)
+{
+	char buf[200];
+	int i;
+
+	for(i = 0; i < test->num_channels; i++)
+	{
+		uart_flush();
+		sprintf(buf, ";@%u:MEAS;", test->channels[i]);
+		comm_send(buf);
+
+
+	}
+
 }
 
 int configure_hw(int fd, test_t* params, mode_t mode)
@@ -336,6 +513,9 @@ int parse_token(char* token, test_t* params)
 
 int parse_test_file(char* filename, test_t* params)
 {
+	params->name = malloc(strlen(filename)+1);
+	strcpy(params->name, filename);
+
 	char* buffer = malloc(10000);
 	if(!buffer)
 	{
@@ -368,16 +548,79 @@ int parse_test_file(char* filename, test_t* params)
 	return 0;
 }
 
+void init_test(test_t* params)
+{
+	memset(params, 0, sizeof(*params));
+}
+
+void start_discharge(test_t* test)
+{
+	test->cur_mode = MODE_DISCHARGE;
+}
+
+void start_charge(test_t* test)
+{
+	test->cur_mode = MODE_CHARGE;
+}
+
+void update_test(test_t* test, int time)
+{
+	measure_hw(123, test);
+	if(test->cur_mode == MODE_CHA_DSCH)
+	{
+		if(time >= test->postcharge_cooldown_start_time + test->postcharge_cooldown)
+		{
+			start_discharge(test);
+		}
+	}
+	else if(test->cur_mode == MODE_DSCH_CHA)
+	{
+		if(time >= test->postdischarge_cooldown_start_time + test->postdischarge_cooldown)
+		{
+			start_charge(test);
+		}
+	}
+}
+
+void run()
+{
+	int num_tests = 1;
+	test_t* tests = malloc(num_tests*sizeof(test_t));
+	init_test(&tests[0]);
+	parse_test_file("test1", &tests[0]);
+	check_params(&tests[0]);
+	translate_settings(&tests[0]);
+	print_params(&tests[0]);
+
+	int pc_start_time = (int)(time(0));
+
+	while(1)
+	{
+		int cur_time = (int)(time(0))-pc_start_time;
+		int t;
+
+		for(t=0; t<num_tests; t++)
+		{
+			update_test(&tests[0], cur_time);
+		}
+	}
+
+}
+
 int main()
 {
-	test_t test1;
-	memset(&test1, 0, sizeof(test1));
+/*	test_t test1;
+	init_test(&test1);
 	parse_test_file("test1", &test1);
 	check_params(&test1);
 	translate_settings(&test1);
 	print_params(&test1);
 	configure_hw(0, &test1, MODE_CHARGE);
 	configure_hw(0, &test1, MODE_DISCHARGE);
+*/
+	char testbuf[1000];
+	int ret = read_reply(0, testbuf, ";@", ";", 999);
+	printf("|RETURN %d||%s\n", ret, testbuf);
 
 	return 0;
 }
