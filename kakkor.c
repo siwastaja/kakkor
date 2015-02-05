@@ -2,6 +2,7 @@
 #include <string.h>
 #include <malloc.h>
 #include <time.h>
+#include <unistd.h>
 
 typedef enum {MODE_OFF = 0, MODE_CHARGE, MODE_DISCHARGE, MODE_CHA_DSCH, MODE_DSCH_CHA} mode_t;
 
@@ -17,7 +18,7 @@ typedef enum {CCCV_UNDEFINED, MODE_CC, MODE_CV} cccv_t;
 const char* short_cccv_names[3] = {"UNDEF", "CC", "CV"};
 
 
-const char* delim = ";\t";
+const char* delim = ";";
 
 #define MAX_PARALLEL_CHANNELS 32
 #define MIN_ID 0
@@ -151,14 +152,51 @@ void aread(int fd, char* buf, int n)
 		strcpy(buf, "6 TMEAS=789"); break;
 		case 3:
 		strcpy(buf, ";asfgdashjughaeghu;gta"); break;
-		default: break;
+		case 4:
+		strcpy(buf, "safsa;@MUOVIKUKKA;;@kakkapissa"); break;
+		case 5:
+		strcpy(buf, ";;@kakka;;"); break;
+		case 6:
+		strcpy(buf, "@viela yksi"); break;
+		case 7:
+		strcpy(buf, ";"); break;
+		default:
+		buf[0] = 0;
+		break;
 	}
 
 	jutska++;
 }
 
 
-int read_reply(int fd, char *outbuf, char* expect_header, char* expect_footer, int maxbytes, int flush)
+//#define EXPECT_HEADER ';'
+//#define EXPECT_FOOTER ';'
+
+#define COMM_SEPARATOR ';'
+#define MAX_READBUF_LEN 200
+
+int read_reply(int fd, char* outbuf, int maxbytes, int flush)
+{
+	static char old_readbuf[MAX_READBUF_LEN];
+	char readbuf[MAX_READBUF_LEN];
+	char* p_readbuf;
+
+	if(flush)
+	{
+		uart_flush();
+	}
+
+	aread(fd, readbuf, MAX_READBUF_LEN-1);
+	p_readbuf = readbuf;
+
+	while(1)
+	{
+		p_readbuf++;
+	}
+}
+
+/*
+int read_reply(int fd, char *outbuf, int maxbytes, int flush)
 {
 	static char old_readbuf[200];
 	char readbuf[200];
@@ -176,21 +214,24 @@ int read_reply(int fd, char *outbuf, char* expect_header, char* expect_footer, i
 		if(old_readbuf[0] != 0)
 		{
 			// We have surpluss stuff from the previous read, process that first
-			
+			strcpy(readbuf, old_readbuf);
+			printf("oldbuf: %s\n", readbuf);
 		}
 		else
 		{
 			aread(fd, readbuf, 199);
 			printf("read1: %s\n", readbuf);
 		}
-		if(p_readbuf = strstr(readbuf, expect_header))
+		if(readbuf[0] == 0)
+			return 5;
+		if((p_readbuf = strchr(readbuf, EXPECT_HEADER)))
 		{
-			p_readbuf += strlen(expect_header);
-			// Got the header; read as long as we get the footer.
+			p_readbuf++;
+			// Got the header; read as long as we find the footer.
 			while(1)
 			{
 				char* p_footer;
-				if(p_footer = strstr(p_readbuf, expect_footer))
+				if((p_footer = strchr(p_readbuf, EXPECT_FOOTER)))
 				{
 					// Found the footer.
 					int size = p_footer - p_readbuf;
@@ -203,6 +244,13 @@ int read_reply(int fd, char *outbuf, char* expect_header, char* expect_footer, i
 						return 4;
 					*p_footer = 0;
 					strcpy(outbuf, p_readbuf);
+					// Copy any excess data after the footer for the next round
+					// p_footer points to the footer, which we
+					// replaced with 0. Now jump over the replaced footer
+					// and copy whatever there
+					// is. If nothing, there is the original terminating zero.
+					p_footer++;
+					strcpy(old_readbuf, p_footer);
 					return 0;
 				}
 
@@ -233,6 +281,8 @@ int read_reply(int fd, char *outbuf, char* expect_header, char* expect_footer, i
 	return 0;
 }
 
+*/
+
 int measure_hw(int fd, test_t* test)
 {
 	char buf[200];
@@ -247,6 +297,7 @@ int measure_hw(int fd, test_t* test)
 
 	}
 
+	return 0;
 }
 
 int configure_hw(int fd, test_t* params, mode_t mode)
@@ -618,9 +669,13 @@ int main()
 	configure_hw(0, &test1, MODE_CHARGE);
 	configure_hw(0, &test1, MODE_DISCHARGE);
 */
-	char testbuf[1000];
-	int ret = read_reply(0, testbuf, ";@", ";", 999);
-	printf("|RETURN %d||%s\n", ret, testbuf);
+	int i;
+	for(i = 0; i < 10; i++)
+	{
+		char testbuf[1000];
+		int ret = read_reply(0, testbuf, 999, 0);
+		printf("%u: |RETURN %d||%s\n", i, ret, testbuf);
+	}
 
 	return 0;
 }
