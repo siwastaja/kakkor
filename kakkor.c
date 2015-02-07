@@ -6,10 +6,10 @@
 
 #include "comm_uart.h"
 
-typedef enum {MODE_OFF = 0, MODE_CHARGE, MODE_DISCHARGE, MODE_CHA_DSCH, MODE_DSCH_CHA} mode_t;
+typedef enum {MODE_UNDEFINED = 0, MODE_OFF, MODE_CHARGE, MODE_DISCHARGE, MODE_CHA_DSCH, MODE_DSCH_CHA} mode_t;
 
-const char* mode_names[5] = {"MODE_OFF", "MODE_CHARGE", "MODE_DISCHARGE", "MODE_CHARGE_TO_DISCHARGE", "MODE_DISCHARGE_TO_CHARGE"};
-const char* short_mode_names[5] = {"OFF", "CHA", "DSCH", "CHA2DSCH", "DSCH2CHA"};
+const char* mode_names[6] = {"MODE_UNDEFINED", "MODE_OFF", "MODE_CHARGE", "MODE_DISCHARGE", "MODE_CHARGE_TO_DISCHARGE", "MODE_DISCHARGE_TO_CHARGE"};
+const char* short_mode_names[6] = {"UNDEF", "OFF", "CHA", "DSCH", "CHA2DSCH", "DSCH2CHA"};
 
 typedef enum {STOP_MODE_UNDEFINED = 0, STOP_MODE_CURRENT, STOP_MODE_VOLTAGE} stop_mode_t;
 
@@ -55,7 +55,8 @@ typedef struct
 
 typedef struct
 {
-	hw_measurement_t hwmeas[MAX_PARALLEL_CHANNELS];
+	int num_hw_measurements;
+	hw_measurement_t hw_meas[MAX_PARALLEL_CHANNELS];
 	double voltage;
 	double current;
 	double temperature;
@@ -77,6 +78,7 @@ typedef struct
 	// List of channels to be averaged to the final voltage reading.
 	// If no sense wires are used, best to average all channels in parallel
 	// If sense wires are used, choose all channels that use them (typically 1 for lazy installation).
+	// This same list is used for temperature sensors, currently...
 	int num_voltchannels;
 	int voltchannels[MAX_PARALLEL_CHANNELS];
 
@@ -84,6 +86,8 @@ typedef struct
 	base_settings_t discharge;
 	hw_base_settings_t hw_charge;
 	hw_base_settings_t hw_discharge;
+
+	measurement_t cur_meas;
 
 	mode_t start_mode;
 	int start_time;
@@ -101,9 +105,100 @@ typedef struct
 
 void log_measurement(measurement_t* m, test_t* t, int time)
 {
-	fprintf(t->log, "%u%s%s%s%s%s%.3f%s%.2f%s%.1f%s%.3f%s%.3f%s%.2f",
+	fprintf(t->log, "%u%s%s%s%s%s%.3f%s%.2f%s%.1f%s%.4f%s%.3f%s%.2f",
 		time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
 		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance);
+}
+
+void print_measurement(measurement_t* m, int time)
+{
+	printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f R=%.2f",
+		time, short_mode_names[m->mode], short_cccv_names[m->cccv],
+		m->voltage, m->current, m->temperature, m->cumul_ah, m->cumul_wh, m->resistance);
+}
+
+
+#define HW_MIN_VOLTAGE 0
+#define HW_MAX_VOLTAGE 7000
+#define HW_MIN_CURRENT -32000
+#define HW_MAX_CURRENT 32000
+#define HW_MIN_TEMPERATURE 0
+#define HW_MAX_TEMPERATURE 65535
+
+
+int get_channel_idx(test_t* test, int channel_id)
+{
+	int i;
+	for(i = 0; i < test->num_channels; i++)
+	{
+		if(channel_id == test->channels[i])
+			return i;
+	}
+	printf("Error: channel index not found with channel id %d\n", channel_id);
+	return -1;
+}
+
+
+int add_measurement(test_t* test, int channel_id, hw_measurement_t* hw)
+{
+	int idx = get_channel_idx(test, channel_id);
+	if(idx < 0)
+		return idx;
+	memcpy(&test->cur_meas.hw_meas[idx], hw, sizeof(hw_measurement_t));
+	test->cur_meas.num_hw_measurements++;
+	return 0;
+}
+
+int parse_hw_measurement(hw_measurement_t* meas, char* str)
+{
+	char* p_val;
+	if(strstr(str, "MEAS") != str)
+		return -1;
+
+	memset(meas, 0, sizeof(hw_measurement_t));
+
+	if(strstr(str, "OFF"))
+		meas->mode = MODE_OFF;
+	else if(strstr(str, "CHA"))
+		meas->mode = MODE_CHARGE;
+	else if(strstr(str, "DSCH"))
+		meas->mode = MODE_DISCHARGE;
+
+	if(strstr(str, "CV"))
+		meas->cccv = MODE_CV;
+	else if(strstr(str, "CC"))
+		meas->cccv = MODE_CV;
+
+	if(meas->mode == MODE_UNDEFINED)
+		return -2;
+	if(meas->cccv == CCCV_UNDEFINED)
+		return -3;
+
+	if((p_val = strstr(str, "V=")))
+	{
+		if(sscanf(p_val, "V=%u", &meas->voltage) != 1)
+			return -4;
+		if(meas->voltage < HW_MIN_VOLTAGE || meas->voltage > HW_MAX_VOLTAGE)
+			return -5;
+	}
+
+	if((p_val = strstr(str, "I=")))
+	{
+		if(sscanf(p_val, "I=%d", &meas->current) != 1)
+			return -6;
+		if(meas->current < HW_MIN_CURRENT || meas->current > HW_MAX_CURRENT)
+			return -7;
+	}
+
+	if((p_val = strstr(str, "T=")))
+	{
+		if(sscanf(p_val, "T=%u", &meas->temperature) != 1)
+			return -8;
+		if(meas->current < HW_MIN_TEMPERATURE || meas->current > HW_MAX_TEMPERATURE)
+			return -9;
+	}
+
+	return 0;
 }
 
 void print_params(test_t* params)
@@ -127,10 +222,42 @@ void print_params(test_t* params)
 		mode_names[params->start_mode], params->postcharge_cooldown, params->postdischarge_cooldown);
 }
 
+int update_measurement(test_t* test, double elapsed_seconds)
+{
+	int ch;
+
+	double voltage_sum = 0.0;
+	double temperature_sum = 0.0;
+	for(ch = 0; ch < test->num_voltchannels; ch++)
+	{
+		int idx = get_channel_idx(test, test->voltchannels[ch]);
+		voltage_sum += (double)test->cur_meas.hw_meas[idx].voltage / 1000.0;
+		temperature_sum += (double)test->cur_meas.hw_meas[idx].temperature / 65535.0;
+	}
+	voltage_sum /= (double)test->num_voltchannels;
+	test->cur_meas.voltage = voltage_sum;
+	test->cur_meas.temperature = temperature_sum / (double)test->num_voltchannels;
+
+	double current_sum = 0;
+	for(ch = 0; ch < test->num_channels; ch++)
+	{
+		current_sum += (double)test->cur_meas.hw_meas[ch].current / 1000.0;
+	}
+	current_sum /= (double)test->num_channels;
+
+	test->cur_meas.current = current_sum;
+	test->cur_meas.cumul_ah += current_sum * elapsed_seconds / 3600.0;
+	test->cur_meas.cumul_wh += current_sum * voltage_sum * elapsed_seconds / 3600.0;
+
+	return 0;
+}
+
 int measure_hw(test_t* test)
 {
 	char buf[200];
+	char* p_buf;
 	int i;
+	int ret;
 
 	uart_flush(test->fd);
 	for(i = 0; i < test->num_channels; i++)
@@ -143,6 +270,41 @@ int measure_hw(test_t* test)
 			return -1;
 		}
 		printf("measure_hw: got reply: %s\n", buf);
+
+		int id = -1;
+		int n = 0;
+		if(sscanf(buf, "%u:%n", &id, &n) != 1)
+		{
+			printf("ID sscanf error\n");
+			return -1;
+		}
+		if(id != test->channels[i])
+		{
+			printf("Error: Got reply from wrong id: expected %d, got %d\n",
+				test->channels[i], id);
+			return -1;
+		}
+		p_buf = buf + n;
+
+		hw_measurement_t meas;
+		if((ret = parse_hw_measurement(&meas, p_buf)))
+		{
+			printf("Error: parse_hw_measurement returned %d\n", ret);
+			return -1;
+		}
+
+		if((ret = add_measurement(test, id, &meas)))
+		{
+			printf("Error: add_measurement returned %d\n", ret);
+			return -1;
+		}
+
+	}
+
+	if(test->cur_meas.num_hw_measurements != test->num_channels)
+	{
+		printf("Error: didn't get measurements from all channels\n");
+		return -1;
 	}
 
 	return 0;
@@ -479,6 +641,9 @@ void start_charge(test_t* test)
 void update_test(test_t* test, int cur_time)
 {
 	measure_hw(test);
+	update_measurement(test, 1);
+	print_measurement(&test->cur_meas, cur_time);
+
 	if(test->cur_mode == MODE_CHA_DSCH)
 	{
 		if(cur_time >= test->postcharge_cooldown_start_time + test->postcharge_cooldown)
@@ -505,18 +670,7 @@ int prepare_test(test_t* test)
 	}
 
 	uart_flush(test->fd);
-//	comm_send(test->fd, ";@1:OFF;");
-	char kakka[100] = ";@1:OFF;";
-	int i;
-	for(i = 0; i < strlen(kakka); i++)
-	{
-		char turhake[2];
-		turhake[0] = kakka[i];
-		turhake[1] = 0;
-		comm_send(test->fd, turhake);
-		printf("%s", turhake); fflush(stdout);
-		usleep(2000);
-	}
+	comm_send(test->fd, ";@1:OFF;");
 	if((ret = comm_expect(test->fd, "OFF OK")))
 	{
 		printf("Test preparation failed; comm_expect for first OFF message returned %d\n", ret);
@@ -546,12 +700,20 @@ void run()
 	}
 
 	int pc_start_time = (int)(time(0));
+	int prev_time = -1;
 
 	while(1)
 	{
-		int cur_time = (int)(time(0))-pc_start_time;
-		int t;
+		int cur_time;
 
+		while(cur_time != prev_time)
+		{
+			usleep(500);
+			prev_time = cur_time;
+			cur_time = (int)(time(0))-pc_start_time;
+		}
+
+		int t;
 		for(t=0; t<num_tests; t++)
 		{
 			update_test(&tests[0], cur_time);
