@@ -135,7 +135,7 @@ int measure_hw(test_t* test)
 	uart_flush(test->fd);
 	for(i = 0; i < test->num_channels; i++)
 	{
-		sprintf(buf, ";@%u:MEAS;", test->channels[i]);
+		sprintf(buf, "@%u:MEAS;", test->channels[i]);
 		comm_send(test->fd, buf);
 		if(read_reply(test->fd, buf, 200))
 		{
@@ -163,23 +163,23 @@ int configure_hw(test_t* params, mode_t mode)
 	for(i = 0; i < params->num_channels; i++)
 	{
 		uart_flush(params->fd);
-		sprintf(buf, ";@%u:OFF;", params->channels[i]);
+		sprintf(buf, "@%u:OFF;", params->channels[i]);
 		comm_send(params->fd, buf);
 		if(comm_expect(params->fd, "OFF OK"))
 			return 1;
-		sprintf(buf, ";@%u:SETI %d;", params->channels[i], settings->current);
+		sprintf(buf, "@%u:SETI %d;", params->channels[i], settings->current);
 		comm_send(params->fd, buf);
 		if(comm_expect(params->fd, "SETI OK"))
 			return 1;
-		sprintf(buf, ";@%u:SETV %d;", params->channels[i], settings->voltage);
+		sprintf(buf, "@%u:SETV %d;", params->channels[i], settings->voltage);
 		comm_send(params->fd, buf);
 		if(comm_expect(params->fd, "SETV OK"))
 			return 1;
-		sprintf(buf, ";@%u:SETISTOP %d;", params->channels[i], settings->stop_current);
+		sprintf(buf, "@%u:SETISTOP %d;", params->channels[i], settings->stop_current);
 		comm_send(params->fd, buf);
 		if(comm_expect(params->fd, "SETISTOP OK"))
 			return 1;
-		sprintf(buf, ";@%u:SETVSTOP %d;", params->channels[i], settings->stop_voltage);
+		sprintf(buf, "@%u:SETVSTOP %d;", params->channels[i], settings->stop_voltage);
 		comm_send(params->fd, buf);
 		if(comm_expect(params->fd, "SETVSTOP OK"))
 			return 1;
@@ -505,18 +505,8 @@ int prepare_test(test_t* test)
 	}
 
 	uart_flush(test->fd);
-//	comm_send(test->fd, ";@1:OFF;");
-	char kakka[100] = ";@1:OFF;";
-	int i;
-	for(i = 0; i < strlen(kakka); i++)
-	{
-		char turhake[2];
-		turhake[0] = kakka[i];
-		turhake[1] = 0;
-		comm_send(test->fd, turhake);
-		printf("%s", turhake); fflush(stdout);
-		usleep(2000);
-	}
+	comm_send(test->fd, "@1:OFF;");
+
 	if((ret = comm_expect(test->fd, "OFF OK")))
 	{
 		printf("Test preparation failed; comm_expect for first OFF message returned %d\n", ret);

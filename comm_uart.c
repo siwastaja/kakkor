@@ -41,6 +41,7 @@ int set_interface_attribs(int fd)
 	tty.c_cflag |= (CLOCAL | CREAD);
 	tty.c_cflag &= ~(PARENB | PARODD);
 	tty.c_cflag &= ~CSTOPB;
+//	tty.c_cflag |= CSTOPB;
 	tty.c_cflag &= ~CRTSCTS;
 
 	cfmakeraw(&tty);
