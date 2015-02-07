@@ -105,18 +105,17 @@ typedef struct
 
 void log_measurement(measurement_t* m, test_t* t, int time)
 {
-	fprintf(t->log, "%u%s%s%s%s%s%.3f%s%.2f%s%.1f%s%.4f%s%.3f%s%.2f",
+	fprintf(t->log, "%u%s%s%s%s%s%.3f%s%.2f%s%.1f%s%.4f%s%.3f%s%.2f\n",
 		time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
 		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance);
 }
 
 void print_measurement(measurement_t* m, int time)
 {
-	printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f R=%.2f",
+	printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f R=%.2f\n",
 		time, short_mode_names[m->mode], short_cccv_names[m->cccv],
 		m->voltage, m->current, m->temperature, m->cumul_ah, m->cumul_wh, m->resistance);
 }
-
 
 #define HW_MIN_VOLTAGE 0
 #define HW_MAX_VOLTAGE 7000
@@ -138,6 +137,11 @@ int get_channel_idx(test_t* test, int channel_id)
 	return -1;
 }
 
+int clear_hw_measurements(test_t* test)
+{
+	test->cur_meas.num_hw_measurements = 0;
+	return 0;
+}
 
 int add_measurement(test_t* test, int channel_id, hw_measurement_t* hw)
 {
@@ -167,7 +171,7 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 	if(strstr(str, "CV"))
 		meas->cccv = MODE_CV;
 	else if(strstr(str, "CC"))
-		meas->cccv = MODE_CV;
+		meas->cccv = MODE_CC;
 
 	if(meas->mode == MODE_UNDEFINED)
 		return -2;
@@ -194,7 +198,7 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 	{
 		if(sscanf(p_val, "T=%u", &meas->temperature) != 1)
 			return -8;
-		if(meas->current < HW_MIN_TEMPERATURE || meas->current > HW_MAX_TEMPERATURE)
+		if(meas->temperature < HW_MIN_TEMPERATURE || meas->temperature > HW_MAX_TEMPERATURE)
 			return -9;
 	}
 
@@ -207,6 +211,11 @@ void print_params(test_t* params)
 	printf("%u parallel channels: ", params->num_channels);
 	for(i = 0; i < params->num_channels; i++)
 		printf("%u  ", params->channels[i]);
+
+	printf("Voltage will be measured from %u channels: ", params->num_voltchannels);
+	for(i = 0; i < params->num_voltchannels; i++)
+		printf("%u  ", params->voltchannels[i]);
+
 	printf("\nCHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
 		params->charge.current, params->charge.voltage, short_stop_mode_names[params->charge.stop_mode], params->charge.stop_current, params->charge.stop_voltage);
 	printf("DISCHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
@@ -231,6 +240,7 @@ int update_measurement(test_t* test, double elapsed_seconds)
 	for(ch = 0; ch < test->num_voltchannels; ch++)
 	{
 		int idx = get_channel_idx(test, test->voltchannels[ch]);
+//		printf("ch %d: idx %d, v=%d\n", ch, idx, test->cur_meas.hw_meas[idx].voltage);
 		voltage_sum += (double)test->cur_meas.hw_meas[idx].voltage / 1000.0;
 		temperature_sum += (double)test->cur_meas.hw_meas[idx].temperature / 65535.0;
 	}
@@ -239,15 +249,53 @@ int update_measurement(test_t* test, double elapsed_seconds)
 	test->cur_meas.temperature = temperature_sum / (double)test->num_voltchannels;
 
 	double current_sum = 0;
+	int num_channels_in_mode[4] = {0,0,0,0};
+	int num_channels_in_cccv[3] = {0,0,0};
+
 	for(ch = 0; ch < test->num_channels; ch++)
 	{
 		current_sum += (double)test->cur_meas.hw_meas[ch].current / 1000.0;
+
+		int chmode = test->cur_meas.hw_meas[ch].mode;
+		if(chmode < 1 || chmode > 3)
+		{
+			printf("Channel %d in illegal mode (%d)!\n", test->channels[ch], chmode);
+			return -1;
+		}
+		num_channels_in_mode[chmode]++;
+
+		int chcccv = test->cur_meas.hw_meas[ch].cccv;
+		if(chcccv < 1 || chcccv > 2)
+		{
+			printf("Channel %d in illegal CC-CV state (%d)!\n", test->channels[ch], chcccv);
+			return -1;
+		}
+		num_channels_in_cccv[chcccv]++;
 	}
 	current_sum /= (double)test->num_channels;
+
+	if(num_channels_in_mode[MODE_CHARGE] && num_channels_in_mode[MODE_DISCHARGE])
+	{
+		printf("Error: channels both in charge & discharge mode!\n");
+		return -1;
+	}
+
+	if(num_channels_in_mode[MODE_CHARGE])
+		test->cur_meas.mode = MODE_CHARGE;
+	else if(num_channels_in_mode[MODE_DISCHARGE])
+		test->cur_meas.mode = MODE_DISCHARGE;
+	else
+		test->cur_meas.mode = MODE_OFF;
+
+	if(num_channels_in_cccv[MODE_CV])
+		test->cur_meas.cccv = MODE_CV;
+	else
+		test->cur_meas.cccv = MODE_CC;
 
 	test->cur_meas.current = current_sum;
 	test->cur_meas.cumul_ah += current_sum * elapsed_seconds / 3600.0;
 	test->cur_meas.cumul_wh += current_sum * voltage_sum * elapsed_seconds / 3600.0;
+
 
 	return 0;
 }
@@ -264,12 +312,12 @@ int measure_hw(test_t* test)
 	{
 		sprintf(buf, "@%u:MEAS;", test->channels[i]);
 		comm_send(test->fd, buf);
-		if(read_reply(test->fd, buf, 200))
+		if((ret = read_reply(test->fd, buf, 200)))
 		{
-			printf("Error getting measurement data\n");
+			printf("Error %d getting measurement data\n", ret);
 			return -1;
 		}
-		printf("measure_hw: got reply: %s\n", buf);
+//		printf("measure_hw: got reply: %s\n", buf);
 
 		int id = -1;
 		int n = 0;
@@ -531,7 +579,23 @@ int parse_token(char* token, test_t* params)
 			params->num_channels++;
 			if(params->num_channels >= MAX_PARALLEL_CHANNELS)
 			{
-				printf("Too many parallel channels\n");
+				printf("Too many parallel channels defined in channels list\n");
+				return 1;
+			}
+		}
+		return 0;
+	}
+	else if(sscanf(token, "voltchannels=%u%n", &params->voltchannels[0], &n) == 1)
+	{
+		token+=n;
+		params->num_voltchannels = 1;
+		while(sscanf(token, ",%u%n", &params->voltchannels[params->num_voltchannels], &n) == 1)
+		{
+			token+=n;
+			params->num_voltchannels++;
+			if(params->num_voltchannels >= MAX_PARALLEL_CHANNELS)
+			{
+				printf("Too many parallel channels defined in voltchannels list\n");
 				return 1;
 			}
 		}
@@ -643,6 +707,7 @@ void update_test(test_t* test, int cur_time)
 	measure_hw(test);
 	update_measurement(test, 1);
 	print_measurement(&test->cur_meas, cur_time);
+	clear_hw_measurements(test);
 
 	if(test->cur_mode == MODE_CHA_DSCH)
 	{
@@ -678,6 +743,8 @@ int prepare_test(test_t* test)
 		return -2;
 	}
 
+	usleep(200000); // todo: fix HW to give "OFF OK" after blinking.
+
 
 	return 0;
 }
@@ -706,12 +773,15 @@ void run()
 	{
 		int cur_time;
 
-		while(cur_time != prev_time)
+		do
 		{
 			usleep(500);
-			prev_time = cur_time;
 			cur_time = (int)(time(0))-pc_start_time;
+//			printf("%d     %d         \r", cur_time, prev_time); fflush(stdout);
 		}
+		while(cur_time == prev_time);
+
+		prev_time = cur_time;
 
 		int t;
 		for(t=0; t<num_tests; t++)

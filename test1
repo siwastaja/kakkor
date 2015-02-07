@@ -1,4 +1,6 @@
 channels=1,2,3
-charge current=20.0 voltage=3.65 stopcurrent=1.5
-discharge current=50.0 stopvoltage=2.50
+voltchannels=1
 
+charge current=20.0 voltage=3.65 stopcurrent=1.5
+
+discharge current=50.0 stopvoltage=2.50
