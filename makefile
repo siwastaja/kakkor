@@ -4,8 +4,8 @@ LD = gcc
 CFLAGS = -Wall
 LDFLAGS = 
 
-DEPS =
-OBJ = kakkor.o
+DEPS = comm_uart.h
+OBJ = kakkor.o comm_uart.o
 
 all: kakkor
 

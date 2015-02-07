@@ -4,6 +4,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "comm_uart.h"
+
 typedef enum {MODE_OFF = 0, MODE_CHARGE, MODE_DISCHARGE, MODE_CHA_DSCH, MODE_DSCH_CHA} mode_t;
 
 const char* mode_names[5] = {"MODE_OFF", "MODE_CHARGE", "MODE_DISCHARGE", "MODE_CHARGE_TO_DISCHARGE", "MODE_DISCHARGE_TO_CHARGE"};
@@ -67,6 +69,8 @@ typedef struct
 typedef struct
 {
 	char* name;
+	char* device_name;
+	int fd;
 	int num_channels;
 	int channels[MAX_PARALLEL_CHANNELS];
 
@@ -123,184 +127,28 @@ void print_params(test_t* params)
 		mode_names[params->start_mode], params->postcharge_cooldown, params->postdischarge_cooldown);
 }
 
-void uart_flush()
-{
-	return;
-}
-
-void comm_send(char* buf)
-{
-	printf("comm_send: |%s|\n", buf);
-}
-
-int comm_expect(char* buf)
-{
-	return 0;
-}
-
-
-void aread(int fd, char* buf, int n)
-{
-	static int jutska = 0;
-	switch(jutska)
-	{
-		case 0:
-		strcpy(buf, "kakkenpis sen vir\ntsen:629"); break;
-		case 1:
-		strcpy(buf, "johannes;@1:VMEAS=123 IMEAS=45"); break;
-		case 2:
-		strcpy(buf, "6 TMEAS=789"); break;
-		case 3:
-		strcpy(buf, ";asfgdashjughaeghu;gta"); break;
-		case 4:
-		strcpy(buf, "safsa;@MUOVIKUKKA;;@kakkapissa"); break;
-		case 5:
-		strcpy(buf, ";;@kakka;;"); break;
-		case 6:
-		strcpy(buf, "@viela yksi"); break;
-		case 7:
-		strcpy(buf, ";"); break;
-		default:
-		buf[0] = 0;
-		break;
-	}
-
-	jutska++;
-}
-
-
-//#define EXPECT_HEADER ';'
-//#define EXPECT_FOOTER ';'
-
-#define COMM_SEPARATOR ';'
-#define MAX_READBUF_LEN 200
-
-int read_reply(int fd, char* outbuf, int maxbytes, int flush)
-{
-	static char old_readbuf[MAX_READBUF_LEN];
-	char readbuf[MAX_READBUF_LEN];
-	char* p_readbuf;
-
-	if(flush)
-	{
-		uart_flush();
-	}
-
-	aread(fd, readbuf, MAX_READBUF_LEN-1);
-	p_readbuf = readbuf;
-
-	while(1)
-	{
-		p_readbuf++;
-	}
-}
-
-/*
-int read_reply(int fd, char *outbuf, int maxbytes, int flush)
-{
-	static char old_readbuf[200];
-	char readbuf[200];
-	char* p_readbuf;
-
-	if(flush)
-	{
-		uart_flush();
-		old_readbuf[0] = 0;
-	}
-
-	while(1)
-	{
-		// Read as long as we get our expected header.
-		if(old_readbuf[0] != 0)
-		{
-			// We have surpluss stuff from the previous read, process that first
-			strcpy(readbuf, old_readbuf);
-			printf("oldbuf: %s\n", readbuf);
-		}
-		else
-		{
-			aread(fd, readbuf, 199);
-			printf("read1: %s\n", readbuf);
-		}
-		if(readbuf[0] == 0)
-			return 5;
-		if((p_readbuf = strchr(readbuf, EXPECT_HEADER)))
-		{
-			p_readbuf++;
-			// Got the header; read as long as we find the footer.
-			while(1)
-			{
-				char* p_footer;
-				if((p_footer = strchr(p_readbuf, EXPECT_FOOTER)))
-				{
-					// Found the footer.
-					int size = p_footer - p_readbuf;
-					if(size < 0)
-						return 1;
-					if(size >= maxbytes)
-						return 2;
-					size++;
-					if(size > maxbytes)
-						return 4;
-					*p_footer = 0;
-					strcpy(outbuf, p_readbuf);
-					// Copy any excess data after the footer for the next round
-					// p_footer points to the footer, which we
-					// replaced with 0. Now jump over the replaced footer
-					// and copy whatever there
-					// is. If nothing, there is the original terminating zero.
-					p_footer++;
-					strcpy(old_readbuf, p_footer);
-					return 0;
-				}
-
-				// Didn't found the footer yet, copy what we have
-				// and read more.
-				int size = strlen(p_readbuf);
-				if(size >= maxbytes)
-					return 3;
-				maxbytes -= size;
-				printf("strcpy %s\n", p_readbuf);
-				strcpy(outbuf, p_readbuf);
-				outbuf+=size;
-				usleep(1000);
-				aread(fd, readbuf, 199);
-				printf("read2: %s\n", readbuf);
-				p_readbuf = readbuf;
-			}
-
-		}
-
-		if(old_readbuf[0] == 0)
-			usleep(1000); // we did a read and did not get everything - wait for more data.
-
-		old_readbuf[0] = 0;
-
-	}
-
-	return 0;
-}
-
-*/
-
-int measure_hw(int fd, test_t* test)
+int measure_hw(test_t* test)
 {
 	char buf[200];
 	int i;
 
+	uart_flush(test->fd);
 	for(i = 0; i < test->num_channels; i++)
 	{
-		uart_flush();
 		sprintf(buf, ";@%u:MEAS;", test->channels[i]);
-		comm_send(buf);
-
-
+		comm_send(test->fd, buf);
+		if(read_reply(test->fd, buf, 200))
+		{
+			printf("Error getting measurement data\n");
+			return -1;
+		}
+		printf("measure_hw: got reply: %s\n", buf);
 	}
 
 	return 0;
 }
 
-int configure_hw(int fd, test_t* params, mode_t mode)
+int configure_hw(test_t* params, mode_t mode)
 {
 	char buf[200];
 	int i;
@@ -314,26 +162,26 @@ int configure_hw(int fd, test_t* params, mode_t mode)
 
 	for(i = 0; i < params->num_channels; i++)
 	{
-		uart_flush();
+		uart_flush(params->fd);
 		sprintf(buf, ";@%u:OFF;", params->channels[i]);
-		comm_send(buf);
-		if(comm_expect("OFF OK"))
+		comm_send(params->fd, buf);
+		if(comm_expect(params->fd, "OFF OK"))
 			return 1;
 		sprintf(buf, ";@%u:SETI %d;", params->channels[i], settings->current);
-		comm_send(buf);
-		if(comm_expect("SETI OK"))
+		comm_send(params->fd, buf);
+		if(comm_expect(params->fd, "SETI OK"))
 			return 1;
 		sprintf(buf, ";@%u:SETV %d;", params->channels[i], settings->voltage);
-		comm_send(buf);
-		if(comm_expect("SETV OK"))
+		comm_send(params->fd, buf);
+		if(comm_expect(params->fd, "SETV OK"))
 			return 1;
 		sprintf(buf, ";@%u:SETISTOP %d;", params->channels[i], settings->stop_current);
-		comm_send(buf);
-		if(comm_expect("SETISTOP OK"))
+		comm_send(params->fd, buf);
+		if(comm_expect(params->fd, "SETISTOP OK"))
 			return 1;
 		sprintf(buf, ";@%u:SETVSTOP %d;", params->channels[i], settings->stop_voltage);
-		comm_send(buf);
-		if(comm_expect("SETVSTOP OK"))
+		comm_send(params->fd, buf);
+		if(comm_expect(params->fd, "SETVSTOP OK"))
 			return 1;
 	}
 
@@ -494,6 +342,23 @@ int parse_token(char* token, test_t* params)
 		param_state = MODE_DISCHARGE;
 		return 0;
 	}
+	else if(strstr(token, "device=") == token)
+	{
+		int arglen;
+		if(params->device_name != NULL)
+		{
+			printf("Note: overriding existing device name (%s)\n", params->device_name);
+			free(params->device_name);
+		}
+		arglen = strlen(token+strlen("device="));
+		if((params->device_name = malloc(arglen+1)) == NULL)
+		{
+			printf("Memory allocation error\n");
+			return -1;
+		}
+		strcpy(params->device_name, token+strlen("device="));
+		return 0;
+	}
 	else if(sscanf(token, "channels=%u%n", &params->channels[0], &n) == 1)
 	{
 		token+=n;
@@ -564,9 +429,6 @@ int parse_token(char* token, test_t* params)
 
 int parse_test_file(char* filename, test_t* params)
 {
-	params->name = malloc(strlen(filename)+1);
-	strcpy(params->name, filename);
-
 	char* buffer = malloc(10000);
 	if(!buffer)
 	{
@@ -614,23 +476,56 @@ void start_charge(test_t* test)
 	test->cur_mode = MODE_CHARGE;
 }
 
-void update_test(test_t* test, int time)
+void update_test(test_t* test, int cur_time)
 {
-	measure_hw(123, test);
+	measure_hw(test);
 	if(test->cur_mode == MODE_CHA_DSCH)
 	{
-		if(time >= test->postcharge_cooldown_start_time + test->postcharge_cooldown)
+		if(cur_time >= test->postcharge_cooldown_start_time + test->postcharge_cooldown)
 		{
 			start_discharge(test);
 		}
 	}
 	else if(test->cur_mode == MODE_DSCH_CHA)
 	{
-		if(time >= test->postdischarge_cooldown_start_time + test->postdischarge_cooldown)
+		if(cur_time >= test->postdischarge_cooldown_start_time + test->postdischarge_cooldown)
 		{
 			start_charge(test);
 		}
 	}
+}
+
+int prepare_test(test_t* test)
+{
+	int ret;
+	if((test->fd = open_device(test->device_name)) < 0)
+	{
+		printf("Error: open_device returned %d\n", test->fd);
+		return -1;
+	}
+
+	uart_flush(test->fd);
+//	comm_send(test->fd, ";@1:OFF;");
+	char kakka[100] = ";@1:OFF;";
+	int i;
+	for(i = 0; i < strlen(kakka); i++)
+	{
+		char turhake[2];
+		turhake[0] = kakka[i];
+		turhake[1] = 0;
+		comm_send(test->fd, turhake);
+		printf("%s", turhake); fflush(stdout);
+		usleep(2000);
+	}
+	if((ret = comm_expect(test->fd, "OFF OK")))
+	{
+		printf("Test preparation failed; comm_expect for first OFF message returned %d\n", ret);
+		close_device(test->fd);
+		return -2;
+	}
+
+
+	return 0;
 }
 
 void run()
@@ -638,10 +533,17 @@ void run()
 	int num_tests = 1;
 	test_t* tests = malloc(num_tests*sizeof(test_t));
 	init_test(&tests[0]);
+	parse_test_file("defaults", &tests[0]);
 	parse_test_file("test1", &tests[0]);
+
 	check_params(&tests[0]);
 	translate_settings(&tests[0]);
 	print_params(&tests[0]);
+	if(prepare_test(&tests[0]))
+	{
+		printf("Stopped.\n");
+		return;
+	}
 
 	int pc_start_time = (int)(time(0));
 
@@ -658,6 +560,8 @@ void run()
 
 }
 
+
+
 int main()
 {
 /*	test_t test1;
@@ -666,16 +570,11 @@ int main()
 	check_params(&test1);
 	translate_settings(&test1);
 	print_params(&test1);
-	configure_hw(0, &test1, MODE_CHARGE);
-	configure_hw(0, &test1, MODE_DISCHARGE);
+	configure_hw(&test1, MODE_CHARGE);
+	configure_hw(&test1, MODE_DISCHARGE);
 */
-	int i;
-	for(i = 0; i < 10; i++)
-	{
-		char testbuf[1000];
-		int ret = read_reply(0, testbuf, 999, 0);
-		printf("%u: |RETURN %d||%s\n", i, ret, testbuf);
-	}
+
+	run();
 
 	return 0;
 }
