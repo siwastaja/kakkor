@@ -1,1 +1,2 @@
 device=/dev/ttyUSB0
+startmode=charge

@@ -90,7 +90,6 @@ typedef struct
 
 	measurement_t cur_meas;
 
-	mode_t start_mode;
 	int start_time;
 	int postcharge_cooldown;
 	int postdischarge_cooldown;
@@ -98,6 +97,7 @@ typedef struct
 	int postdischarge_cooldown_start_time;
 
 	int cycle_cnt;
+	mode_t start_mode;
 	mode_t cur_mode;
 	mode_t next_mode;
 	FILE* log;
@@ -550,7 +550,7 @@ int check_params(test_t* params)
 	if(params->num_channels < 1 || params->num_channels > MAX_PARALLEL_CHANNELS)
 	{
 		printf("Illegal number of parallel channels: %u\n", params->num_channels);
-		return 1;
+		return -1;
 	}
 
 	for(i = 0; i < params->num_channels; i++)
@@ -558,14 +558,14 @@ int check_params(test_t* params)
 		if(params->channels[i] < MIN_ID || params->channels[i] > MAX_ID)
 		{
 			printf("Illegal channel ID: %u\n", params->channels[i]);
-			return 1;
+			return -1;
 		}
 	}
 
 	if(check_base_settings("Charge", &params->charge))
-		return 1;
+		return -1;
 	if(check_base_settings("Discharge", &params->discharge))
-		return 1;
+		return -1;
 
 	return 0;
 }
@@ -601,6 +601,16 @@ int parse_token(char* token, test_t* params)
 			return -1;
 		}
 		strcpy(params->device_name, token+strlen("device="));
+		return 0;
+	}
+	else if(strstr(token, "startmode=charge") == token)
+	{
+		params->start_mode=MODE_CHARGE;
+		return 0;
+	}
+	else if(strstr(token, "startmode=discharge") == token)
+	{
+		params->start_mode=MODE_DISCHARGE;
 		return 0;
 	}
 	else if(sscanf(token, "channels=%u%n", &params->channels[0], &n) == 1)
@@ -682,6 +692,10 @@ int parse_token(char* token, test_t* params)
 			printf("stopvoltage token without charge/discharge keyword before.\n");
 			return 1;
 		}
+	}
+	else
+	{
+		printf("Warning: ignoring unrecognized token %s\n", token);
 	}
 
 	return 0;
@@ -777,6 +791,8 @@ void update_test(test_t* test, int cur_time)
 int prepare_test(test_t* test)
 {
 	int ret;
+
+	test->next_mode = test->start_mode;
 	if((test->fd = open_device(test->device_name)) < 0)
 	{
 		printf("Error: open_device returned %d\n", test->fd);
@@ -798,23 +814,8 @@ int prepare_test(test_t* test)
 	return 0;
 }
 
-void run()
+void run(int num_tests, test_t* tests)
 {
-	int num_tests = 1;
-	test_t* tests = malloc(num_tests*sizeof(test_t));
-	init_test(&tests[0]);
-	parse_test_file("defaults", &tests[0]);
-	parse_test_file("test1", &tests[0]);
-
-	check_params(&tests[0]);
-	translate_settings(&tests[0]);
-	print_params(&tests[0]);
-	if(prepare_test(&tests[0]))
-	{
-		printf("Stopped.\n");
-		return;
-	}
-
 	int pc_start_time = (int)(time(0));
 	int prev_time = -1;
 
@@ -826,7 +827,6 @@ void run()
 		{
 			usleep(500);
 			cur_time = (int)(time(0))-pc_start_time;
-//			printf("%d     %d         \r", cur_time, prev_time); fflush(stdout);
 		}
 		while(cur_time == prev_time);
 
@@ -843,7 +843,7 @@ void run()
 
 
 
-int main()
+int main(int argc, char** argv)
 {
 /*	test_t test1;
 	init_test(&test1);
@@ -855,7 +855,35 @@ int main()
 	configure_hw(&test1, MODE_DISCHARGE);
 */
 
-	run();
+	int num_tests = argc-1;
+	test_t* tests = malloc(num_tests*sizeof(test_t));
+	int t;
+	for(t=0; t < num_tests; t++)
+	{
+		init_test(&tests[t]);
+		if(parse_test_file("defaults", &tests[t]))
+		{
+			free(tests);
+			return 1;
+		}
+		if(parse_test_file(argv[t+1], &tests[t]))
+		{
+			free(tests);
+			return 1;
+		}
+	}
+
+	for(t = 0; t < num_tests; t++)
+	{
+		if(check_params(&tests[t]) || translate_settings(&tests[t]) || prepare_test(&tests[t]))
+		{
+			free(tests);
+			return;
+		}
+		print_params(&tests[t]);
+	}
+
+	run(num_tests, tests);
 
 	return 0;
 }
