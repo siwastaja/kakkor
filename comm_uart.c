@@ -193,7 +193,6 @@ int comm_expect(int fd, char* buf)
 {
 	char readbuf[1000];
 	int ret;
-//	printf("comm_expect\n");
 	if((ret = read_reply(fd, readbuf, 1000)))
 	{
 		return ret;
@@ -202,5 +201,47 @@ int comm_expect(int fd, char* buf)
 		return 0;
 	else
 		return -999;
+}
+
+// Sends sendbuf, expects expect, sets the result AFTER expect buffer to rxbuf, returns 0
+// In case of error, autoretries, and returns negative if failure.
+int comm_autoretry(int fd, char* sendbuf, char* expect, char* rxbuf)
+{
+	char readbuf[1000];
+	int retry = 0;
+	while(1)
+	{
+		int ret;
+		comm_send(fd, sendbuf);
+		if((ret = read_reply(fd, readbuf, 1000)) == 0)
+		{
+			int len = strlen(expect);
+			if(strncmp(readbuf, expect, len) == 0)
+			{
+				if(rxbuf)
+					strcpy(rxbuf, readbuf+len);
+				return 0;
+			}
+			else
+			{
+				printf("comm_autoretry: reply (%s) not as expected (%s) -- ", readbuf, expect);
+			}
+		}
+		else
+		{
+			printf("comm_autoretry: read_reply returned %d -- ", ret);
+		}
+		retry++;
+		uart_flush(fd);
+		if(retry > 5)
+		{
+			printf("out of autoretries, giving up.\n"); 
+			return -1;
+		}
+		int sleepy = retry*retry*retry;
+		printf("autoretry #%d after sleeping %d ms...\n", sleepy);
+		usleep(1000*sleepy);
+	}
+	return -1;
 }
 

@@ -10,6 +10,7 @@ typedef enum {MODE_UNDEFINED = 0, MODE_OFF, MODE_CHARGE, MODE_DISCHARGE, MODE_CH
 
 const char* mode_names[6] = {"MODE_UNDEFINED", "MODE_OFF", "MODE_CHARGE", "MODE_DISCHARGE", "MODE_CHARGE_TO_DISCHARGE", "MODE_DISCHARGE_TO_CHARGE"};
 const char* short_mode_names[6] = {"UNDEF", "OFF", "CHA", "DSCH", "CHA2DSCH", "DSCH2CHA"};
+const char* mode_commands[4] = {"OFF","OFF","CHA","DSCH"};
 
 typedef enum {STOP_MODE_UNDEFINED = 0, STOP_MODE_CURRENT, STOP_MODE_VOLTAGE} stop_mode_t;
 
@@ -98,6 +99,7 @@ typedef struct
 
 	int cycle_cnt;
 	mode_t cur_mode;
+	mode_t next_mode;
 	FILE* log;
 	FILE* verbose_log;
 
@@ -124,6 +126,46 @@ void print_measurement(measurement_t* m, int time)
 #define HW_MIN_TEMPERATURE 0
 #define HW_MAX_TEMPERATURE 65535
 
+int set_channel_mode(test_t* test, int channel, mode_t mode)
+{
+	if(mode != MODE_OFF && mode != MODE_CHARGE && mode != MODE_DISCHARGE)
+	{
+		printf("Error: invalid mode requested (%d)!\n", mode);
+		return -1;
+	}
+	if(channel < MIN_ID || channel > MAX_ID)
+	{
+		printf("Error: invalid channel requested (%d)!\n", channel);
+		return -1;
+	}
+
+	char txbuf[32];
+	sprintf(txbuf, "@%u:%s;", channel, mode_commands[mode]);
+	char expect[32];
+	sprintf(expect, "%s OK", mode_commands[mode]);
+
+	if(comm_autoretry(test->fd, txbuf, expect, NULL))
+	{
+		printf("Emergency: setting channel %d to mode %s failed!\n", channel, mode_names[mode]);
+		return -1;
+	}
+
+	return 0;
+}
+
+int set_test_mode(test_t* test, mode_t mode)
+{
+	int i;
+	int fail = 0;
+	for(i = 0; i < test->num_channels; i++)
+	{
+		if(set_channel_mode(test, test->channels[i], mode))
+			fail = -1;
+	}
+
+	test->cur_mode = mode;
+	return fail;
+}
 
 int get_channel_idx(test_t* test, int channel_id)
 {
@@ -156,8 +198,10 @@ int add_measurement(test_t* test, int channel_id, hw_measurement_t* hw)
 int parse_hw_measurement(hw_measurement_t* meas, char* str)
 {
 	char* p_val;
-	if(strstr(str, "MEAS") != str)
-		return -1;
+
+//	now checked using comm_autoretry():
+//	if(strstr(str, "MEAS") != str)
+//		return -1;
 
 	memset(meas, 0, sizeof(hw_measurement_t));
 
@@ -302,46 +346,33 @@ int update_measurement(test_t* test, double elapsed_seconds)
 
 int measure_hw(test_t* test)
 {
-	char buf[200];
-	char* p_buf;
+	char txbuf[100];
+	char expectbuf[100];
+	char rxbuf[1000];
 	int i;
 	int ret;
 
 	uart_flush(test->fd);
 	for(i = 0; i < test->num_channels; i++)
 	{
-		sprintf(buf, "@%u:MEAS;", test->channels[i]);
-		comm_send(test->fd, buf);
-		if((ret = read_reply(test->fd, buf, 200)))
+		sprintf(txbuf, "@%u:MEAS;", test->channels[i]);
+		sprintf(expectbuf, "%u:MEAS ", test->channels[i]);
+		if(comm_autoretry(test->fd, txbuf, expectbuf, rxbuf))
 		{
-			printf("Error %d getting measurement data\n", ret);
+			printf("Error getting measurement data\n");
 			return -1;
 		}
-//		printf("measure_hw: got reply: %s\n", buf);
 
-		int id = -1;
-		int n = 0;
-		if(sscanf(buf, "%u:%n", &id, &n) != 1)
-		{
-			printf("ID sscanf error\n");
-			return -1;
-		}
-		if(id != test->channels[i])
-		{
-			printf("Error: Got reply from wrong id: expected %d, got %d\n",
-				test->channels[i], id);
-			return -1;
-		}
-		p_buf = buf + n;
+		printf("measure_hw: got reply: %s\n", rxbuf);
 
 		hw_measurement_t meas;
-		if((ret = parse_hw_measurement(&meas, p_buf)))
+		if((ret = parse_hw_measurement(&meas, rxbuf)))
 		{
 			printf("Error: parse_hw_measurement returned %d\n", ret);
 			return -1;
 		}
 
-		if((ret = add_measurement(test, id, &meas)))
+		if((ret = add_measurement(test, test->channels[i], &meas)))
 		{
 			printf("Error: add_measurement returned %d\n", ret);
 			return -1;
@@ -368,31 +399,33 @@ int configure_hw(test_t* params, mode_t mode)
 	else if(mode == MODE_DISCHARGE)
 		settings = &params->hw_discharge;
 	else
-		return 555;
+	{
+		printf("Illegal mode (%d) supplied to configure_hw()\n", mode);
+		return -2;
+	}
 
+	uart_flush(params->fd);
 	for(i = 0; i < params->num_channels; i++)
 	{
-		uart_flush(params->fd);
 		sprintf(buf, "@%u:OFF;", params->channels[i]);
-		comm_send(params->fd, buf);
-		if(comm_expect(params->fd, "OFF OK"))
-			return 1;
+		if(comm_autoretry(params->fd, buf, "OFF OK", NULL))
+			return -1;
+
 		sprintf(buf, "@%u:SETI %d;", params->channels[i], settings->current);
-		comm_send(params->fd, buf);
-		if(comm_expect(params->fd, "SETI OK"))
-			return 1;
+		if(comm_autoretry(params->fd, buf, "SETI OK", NULL))
+			return -1;
+
 		sprintf(buf, "@%u:SETV %d;", params->channels[i], settings->voltage);
-		comm_send(params->fd, buf);
-		if(comm_expect(params->fd, "SETV OK"))
-			return 1;
+		if(comm_autoretry(params->fd, buf, "SETV OK", NULL))
+			return -1;
+
 		sprintf(buf, "@%u:SETISTOP %d;", params->channels[i], settings->stop_current);
-		comm_send(params->fd, buf);
-		if(comm_expect(params->fd, "SETISTOP OK"))
-			return 1;
+		if(comm_autoretry(params->fd, buf, "SETISTOP OK", NULL))
+			return -1;
+
 		sprintf(buf, "@%u:SETVSTOP %d;", params->channels[i], settings->stop_voltage);
-		comm_send(params->fd, buf);
-		if(comm_expect(params->fd, "SETVSTOP OK"))
-			return 1;
+		if(comm_autoretry(params->fd, buf, "SETVSTOP OK", NULL))
+			return -1;
 	}
 
 	return 0;
@@ -447,6 +480,7 @@ int translate_settings(test_t* params)
 
 #define MIN_CURRENT 0.0
 #define MAX_CURRENT 1000.0
+
 int check_base_settings(char* name, base_settings_t* params)
 {
 	if(params->current == 0.0)
@@ -706,6 +740,21 @@ void update_test(test_t* test, int cur_time)
 {
 	measure_hw(test);
 	update_measurement(test, 1);
+	if(test->cur_meas.mode == MODE_OFF && test->cur_mode != MODE_OFF)
+	{
+		printf("Info: Cycle ended, setting test off.\n");
+		if(test->cur_mode == MODE_CHARGE)
+		{
+			test->postcharge_cooldown_start_time = cur_time;
+			test->next_mode = MODE_DISCHARGE;
+		}
+		else if(test->cur_mode == MODE_DISCHARGE)
+		{
+			test->postdischarge_cooldown_start_time = cur_time;
+			test->next_mode = MODE_CHARGE;
+		}
+		set_test_mode(test, MODE_OFF);
+	}
 	print_measurement(&test->cur_meas, cur_time);
 	clear_hw_measurements(test);
 
