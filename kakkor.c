@@ -6,10 +6,10 @@
 
 #include "comm_uart.h"
 
-typedef enum {MODE_UNDEFINED = 0, MODE_OFF, MODE_CHARGE, MODE_DISCHARGE, MODE_CHA_DSCH, MODE_DSCH_CHA} mode_t;
+typedef enum {MODE_UNDEFINED = 0, MODE_OFF, MODE_CHARGE, MODE_DISCHARGE} mode_t;
 
-const char* mode_names[6] = {"MODE_UNDEFINED", "MODE_OFF", "MODE_CHARGE", "MODE_DISCHARGE", "MODE_CHARGE_TO_DISCHARGE", "MODE_DISCHARGE_TO_CHARGE"};
-const char* short_mode_names[6] = {"UNDEF", "OFF", "CHA", "DSCH", "CHA2DSCH", "DSCH2CHA"};
+const char* mode_names[4] = {"MODE_UNDEFINED", "MODE_OFF", "MODE_CHARGE", "MODE_DISCHARGE"};
+const char* short_mode_names[4] = {"UNDEF", "OFF", "CHA", "DSCH"};
 const char* mode_commands[4] = {"OFF","OFF","CHA","DSCH"};
 
 typedef enum {STOP_MODE_UNDEFINED = 0, STOP_MODE_CURRENT, STOP_MODE_VOLTAGE} stop_mode_t;
@@ -93,8 +93,7 @@ typedef struct
 	int start_time;
 	int postcharge_cooldown;
 	int postdischarge_cooldown;
-	int postcharge_cooldown_start_time;
-	int postdischarge_cooldown_start_time;
+	int cooldown_start_time;
 
 	int cycle_cnt;
 	mode_t start_mode;
@@ -146,7 +145,7 @@ int set_channel_mode(test_t* test, int channel, mode_t mode)
 
 	if(comm_autoretry(test->fd, txbuf, expect, NULL))
 	{
-		printf("Emergency: setting channel %d to mode %s failed!\n", channel, mode_names[mode]);
+		printf("Emergency: failed to set channel %d to mode %s!\n", channel, mode_names[mode]);
 		return -1;
 	}
 
@@ -164,6 +163,23 @@ int set_test_mode(test_t* test, mode_t mode)
 	}
 
 	test->cur_mode = mode;
+	return fail;
+}
+
+int configure_hw(test_t* params, mode_t mode);
+int translate_settings(test_t* params);
+
+int translate_configure_channel_hws(test_t* test, mode_t mode)
+{
+	int i;
+	int fail = 0;
+	if(translate_settings(test))
+		return -1;
+	for(i = 0; i < test->num_channels; i++)
+	{
+		if(configure_hw(test, mode))
+			fail = -2;
+	}
 	return fail;
 }
 
@@ -725,6 +741,7 @@ int parse_test_file(char* filename, test_t* params)
 			if(parse_token(p, params))
 			{
 				free(buffer);
+				fclose(testfile);
 				return 3;
 			}
 
@@ -732,6 +749,8 @@ int parse_test_file(char* filename, test_t* params)
 		}
 	}
 
+	free(buffer);
+	fclose(testfile);
 	return 0;
 }
 
@@ -740,14 +759,18 @@ void init_test(test_t* params)
 	memset(params, 0, sizeof(*params));
 }
 
-void start_discharge(test_t* test)
+int start_discharge(test_t* test)
 {
-	test->cur_mode = MODE_DISCHARGE;
+	if(translate_configure_channel_hws(test, MODE_DISCHARGE) || set_test_mode(test, MODE_DISCHARGE))
+		return -1;
+	return 0;
 }
 
-void start_charge(test_t* test)
+int start_charge(test_t* test)
 {
-	test->cur_mode = MODE_CHARGE;
+	if(translate_configure_channel_hws(test, MODE_CHARGE) || set_test_mode(test, MODE_CHARGE))
+		return -1;
+	return 0;
 }
 
 void update_test(test_t* test, int cur_time)
@@ -759,12 +782,12 @@ void update_test(test_t* test, int cur_time)
 		printf("Info: Cycle ended, setting test off.\n");
 		if(test->cur_mode == MODE_CHARGE)
 		{
-			test->postcharge_cooldown_start_time = cur_time;
+			test->cooldown_start_time = cur_time;
 			test->next_mode = MODE_DISCHARGE;
 		}
 		else if(test->cur_mode == MODE_DISCHARGE)
 		{
-			test->postdischarge_cooldown_start_time = cur_time;
+			test->cooldown_start_time = cur_time;
 			test->next_mode = MODE_CHARGE;
 		}
 		set_test_mode(test, MODE_OFF);
@@ -772,16 +795,18 @@ void update_test(test_t* test, int cur_time)
 	print_measurement(&test->cur_meas, cur_time);
 	clear_hw_measurements(test);
 
-	if(test->cur_mode == MODE_CHA_DSCH)
+	if(test->cur_mode == MODE_OFF && test->next_mode == MODE_DISCHARGE)
 	{
-		if(cur_time >= test->postcharge_cooldown_start_time + test->postcharge_cooldown)
+		printf("Info: Starting discharge in %d seconds...    \r", test->cooldown_start_time + test->postcharge_cooldown - cur_time); fflush(stdout);
+		if(cur_time >= test->cooldown_start_time + test->postcharge_cooldown)
 		{
 			start_discharge(test);
 		}
 	}
-	else if(test->cur_mode == MODE_DSCH_CHA)
+	else if(test->cur_mode == MODE_OFF && test->next_mode == MODE_CHARGE)
 	{
-		if(cur_time >= test->postdischarge_cooldown_start_time + test->postdischarge_cooldown)
+		printf("Info: Starting charge in %d seconds...    \r", test->cooldown_start_time + test->postdischarge_cooldown - cur_time); fflush(stdout);
+		if(cur_time >= test->cooldown_start_time + test->postdischarge_cooldown)
 		{
 			start_charge(test);
 		}
@@ -792,7 +817,9 @@ int prepare_test(test_t* test)
 {
 	int ret;
 
+	test->cur_mode = MODE_OFF;
 	test->next_mode = test->start_mode;
+	test->cooldown_start_time = -999999; // this enforces the test to start
 	if((test->fd = open_device(test->device_name)) < 0)
 	{
 		printf("Error: open_device returned %d\n", test->fd);
@@ -856,6 +883,12 @@ int main(int argc, char** argv)
 */
 
 	int num_tests = argc-1;
+	if(num_tests < 1)
+	{
+		printf("Usage: kakkor <test1> [test2] [test3] ...\n");
+		return 1;
+	}
+
 	test_t* tests = malloc(num_tests*sizeof(test_t));
 	int t;
 	for(t=0; t < num_tests; t++)
@@ -878,7 +911,7 @@ int main(int argc, char** argv)
 		if(check_params(&tests[t]) || translate_settings(&tests[t]) || prepare_test(&tests[t]))
 		{
 			free(tests);
-			return;
+			return 1;
 		}
 		print_params(&tests[t]);
 	}

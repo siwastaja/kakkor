@@ -79,12 +79,12 @@ void uart_flush(int fd)
 	tcflush(fd, TCIOFLUSH);
 }
 
-int comm_send(int devide_fd, char* buf)
+int comm_send(int device_fd, char* buf)
 {
 	int len = 0;
 	len = strlen(buf);
 	if(len < 1) return -1;
-	write(devide_fd, buf, len);
+	write(device_fd, buf, len);
 	return len;
 }
 
@@ -239,7 +239,7 @@ int comm_autoretry(int fd, char* sendbuf, char* expect, char* rxbuf)
 			return -1;
 		}
 		int sleepy = retry*retry*retry;
-		printf("autoretry #%d after sleeping %d ms...\n", sleepy);
+		printf("autoretry #%d after sleeping %d ms...\n", retry, sleepy);
 		usleep(1000*sleepy);
 	}
 	return -1;
