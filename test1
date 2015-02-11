@@ -1,6 +1,7 @@
-channels=1,2,3
-voltchannels=1
+channels=2,3
+voltchannels=2
+startmode=charge
 
-charge current=20.0 voltage=3.65 stopcurrent=1.5
+charge current=20.0 voltage=3.40 stopcurrent=15
 
-discharge current=50.0 stopvoltage=2.50
+discharge current=40.0 stopvoltage=3.16

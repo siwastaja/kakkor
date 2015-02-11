@@ -127,6 +127,7 @@ void print_measurement(measurement_t* m, int time)
 
 int set_channel_mode(test_t* test, int channel, mode_t mode)
 {
+	usleep(50000);
 	if(mode != MODE_OFF && mode != MODE_CHARGE && mode != MODE_DISCHARGE)
 	{
 		printf("Error: invalid mode requested (%d)!\n", mode);
@@ -158,6 +159,8 @@ int set_test_mode(test_t* test, mode_t mode)
 	int fail = 0;
 	for(i = 0; i < test->num_channels; i++)
 	{
+		usleep(10000);
+		printf("INFO: Setting channel %d to mode %d\n", test->channels[i], mode);
 		if(set_channel_mode(test, test->channels[i], mode))
 			fail = -1;
 	}
@@ -171,15 +174,13 @@ int translate_settings(test_t* params);
 
 int translate_configure_channel_hws(test_t* test, mode_t mode)
 {
-	int i;
 	int fail = 0;
 	if(translate_settings(test))
 		return -1;
-	for(i = 0; i < test->num_channels; i++)
-	{
-		if(configure_hw(test, mode))
-			fail = -2;
-	}
+
+	if(configure_hw(test, mode))
+		fail = -2;
+
 	return fail;
 }
 
@@ -332,7 +333,6 @@ int update_measurement(test_t* test, double elapsed_seconds)
 		}
 		num_channels_in_cccv[chcccv]++;
 	}
-	current_sum /= (double)test->num_channels;
 
 	if(num_channels_in_mode[MODE_CHARGE] && num_channels_in_mode[MODE_DISCHARGE])
 	{
@@ -342,10 +342,16 @@ int update_measurement(test_t* test, double elapsed_seconds)
 
 	if(num_channels_in_mode[MODE_CHARGE])
 		test->cur_meas.mode = MODE_CHARGE;
-	else if(num_channels_in_mode[MODE_DISCHARGE])
+	if(num_channels_in_mode[MODE_DISCHARGE])
 		test->cur_meas.mode = MODE_DISCHARGE;
-	else
+
+	// todo: fix both charge & discharge.
+
+	if(num_channels_in_mode[MODE_OFF] > 0)
 		test->cur_meas.mode = MODE_OFF;
+
+	printf("num_channels_in_off = %d, num_channels_in_charge = %d, num_channels_in_discharge = %d\n", num_channels_in_mode[MODE_OFF], num_channels_in_mode[MODE_CHARGE], num_channels_in_mode[MODE_DISCHARGE]);
+	printf("------> MODE = %s\n", mode_names[test->cur_meas.mode]);
 
 	if(num_channels_in_cccv[MODE_CV])
 		test->cur_meas.cccv = MODE_CV;
@@ -423,25 +429,61 @@ int configure_hw(test_t* params, mode_t mode)
 	uart_flush(params->fd);
 	for(i = 0; i < params->num_channels; i++)
 	{
+		int extra_vstop = 1000;
+		int extra_vcv = 500;
+		int ch;
+		for(ch = 0; ch < params->num_voltchannels; ch++)
+		{
+			if(params->voltchannels[ch] == params->channels[i])
+			{
+				printf("Channel %d in in voltchannel list, going for extra_vstop = 0\n", params->channels[i]);
+				extra_vstop = 0;
+				extra_vcv = 0;
+				break;
+			}
+		}
+
+		if(mode == MODE_DISCHARGE)
+		{
+			extra_vstop *= -1;
+			extra_vcv *= -1;
+		}
+
+		printf("Info: configuring channel %u\n", params->channels[i]);
 		sprintf(buf, "@%u:OFF;", params->channels[i]);
 		if(comm_autoretry(params->fd, buf, "OFF OK", NULL))
 			return -1;
 
+		usleep(100000);
+
 		sprintf(buf, "@%u:SETI %d;", params->channels[i], settings->current);
+		printf("      %s\n", buf);
 		if(comm_autoretry(params->fd, buf, "SETI OK", NULL))
 			return -1;
 
-		sprintf(buf, "@%u:SETV %d;", params->channels[i], settings->voltage);
+		usleep(100000);
+
+		sprintf(buf, "@%u:SETV %d;", params->channels[i], settings->voltage+extra_vcv);
+		printf("      %s\n", buf);
 		if(comm_autoretry(params->fd, buf, "SETV OK", NULL))
 			return -1;
 
+		usleep(100000);
+
 		sprintf(buf, "@%u:SETISTOP %d;", params->channels[i], settings->stop_current);
+		printf("      %s\n", buf);
 		if(comm_autoretry(params->fd, buf, "SETISTOP OK", NULL))
 			return -1;
 
-		sprintf(buf, "@%u:SETVSTOP %d;", params->channels[i], settings->stop_voltage);
+		usleep(100000);
+
+		sprintf(buf, "@%u:SETVSTOP %d;", params->channels[i], settings->stop_voltage+extra_vstop);
+		printf("      %s\n", buf);
 		if(comm_autoretry(params->fd, buf, "SETVSTOP OK", NULL))
 			return -1;
+
+		usleep(100000);
+
 	}
 
 	return 0;
@@ -456,13 +498,13 @@ int translate_settings(test_t* params)
 		params->hw_charge.voltage = (int)(params->charge.voltage*1000.0);
 		// In current stop mode, stop voltage will be set so that it's never met - HW does not use
 		// "stop modes" at all. Stop voltage will be used as a kind of safety measure.
-		params->hw_charge.stop_voltage = (int)((params->charge.voltage+0.1)*1000.0);
+		params->hw_charge.stop_voltage = (int)((params->charge.voltage+0.5)*1000.0);
 	}
 	else if(params->charge.stop_mode == STOP_MODE_VOLTAGE)
 	{
 		params->hw_charge.stop_voltage = (int)(params->charge.stop_voltage*1000.0);
 		// Same here - stop mode is achieved by having stop voltage lower than CV voltage.
-		params->hw_charge.voltage = (int)((params->charge.stop_voltage+0.1)*1000.0);
+		params->hw_charge.voltage = (int)((params->charge.stop_voltage+0.5)*1000.0);
 		params->hw_charge.stop_current = 1; // stop current will never be met.
 	}
 	else
@@ -476,12 +518,12 @@ int translate_settings(test_t* params)
 	{
 		params->hw_discharge.stop_current = -1*((int)(params->discharge.stop_current*1000.0/params->num_channels));
 		params->hw_discharge.voltage = (int)(params->discharge.voltage*1000.0);
-		params->hw_discharge.stop_voltage = (int)((params->discharge.voltage-0.1)*1000.0);
+		params->hw_discharge.stop_voltage = (int)((params->discharge.voltage-0.5)*1000.0);
 	}
 	else if(params->discharge.stop_mode == STOP_MODE_VOLTAGE)
 	{
 		params->hw_discharge.stop_voltage = (int)(params->discharge.stop_voltage*1000.0);
-		params->hw_discharge.voltage = (int)((params->discharge.stop_voltage-0.1)*1000.0);
+		params->hw_discharge.voltage = (int)((params->discharge.stop_voltage-0.5)*1000.0);
 		params->hw_discharge.stop_current = -1;
 	}
 	else
@@ -801,6 +843,7 @@ void update_test(test_t* test, int cur_time)
 		if(cur_time >= test->cooldown_start_time + test->postcharge_cooldown)
 		{
 			start_discharge(test);
+			sleep(1);
 		}
 	}
 	else if(test->cur_mode == MODE_OFF && test->next_mode == MODE_CHARGE)
@@ -809,6 +852,7 @@ void update_test(test_t* test, int cur_time)
 		if(cur_time >= test->cooldown_start_time + test->postdischarge_cooldown)
 		{
 			start_charge(test);
+			sleep(1);
 		}
 	}
 }
