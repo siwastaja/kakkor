@@ -1,5 +1,5 @@
 channels=2,3
-voltchannels=2
+masterchannel=2
 startmode=charge
 
 charge current=20.0 voltage=3.40 stopcurrent=15

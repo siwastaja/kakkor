@@ -75,13 +75,10 @@ typedef struct
 	int fd;
 	int num_channels;
 	int channels[MAX_PARALLEL_CHANNELS];
-
-	// List of channels to be averaged to the final voltage reading.
-	// If no sense wires are used, best to average all channels in parallel
-	// If sense wires are used, choose all channels that use them (typically 1 for lazy installation).
-	// This same list is used for temperature sensors, currently...
-	int num_voltchannels;
-	int voltchannels[MAX_PARALLEL_CHANNELS];
+	int master_channel_idx; // index to channels[] to show which channel is "master".
+	// voltage sense and temperature reading are taken from the master channel.
+	// When master channel is in CV mode, its current is copied to other channels
+	// every second.
 
 	base_settings_t charge;
 	base_settings_t discharge;
@@ -273,7 +270,7 @@ void print_params(test_t* params)
 	for(i = 0; i < params->num_channels; i++)
 		printf("%u  ", params->channels[i]);
 
-	printf("Voltage will be measured from %u channels: ", params->num_voltchannels);
+	printf("Master channel will be: ", params->);
 	for(i = 0; i < params->num_voltchannels; i++)
 		printf("%u  ", params->voltchannels[i]);
 
