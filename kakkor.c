@@ -50,6 +50,7 @@ typedef struct
 	int current;
 	int temperature;
 	int is_cv;
+	int current_setpoint;
 	mode_t mode;
 	cccv_t cccv;
 } hw_measurement_t;
@@ -260,6 +261,14 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 			return -9;
 	}
 
+	if((p_val = strstr(str, "Iset=")))
+	{
+		if(sscanf(p_val, "I=%d", &meas->current_setpoint) != 1)
+			return -10;
+		if(meas->current_setpoint < HW_MIN_CURRENT || meas->current_setpoint > HW_MAX_CURRENT)
+			return -11;
+	}
+
 	return 0;
 }
 
@@ -374,7 +383,7 @@ int measure_hw(test_t* test)
 	uart_flush(test->fd);
 	for(i = 0; i < test->num_channels; i++)
 	{
-		sprintf(txbuf, "@%u:MEAS;", test->channels[i]);
+		sprintf(txbuf, "@%u:VERB;", test->channels[i]);
 		sprintf(expectbuf, "%u:MEAS ", test->channels[i]);
 		if(comm_autoretry(test->fd, txbuf, expectbuf, rxbuf))
 		{
@@ -397,6 +406,30 @@ int measure_hw(test_t* test)
 			return -1;
 		}
 
+		if(i == test->master_channel_idx && meas.cccv == MODE_CV)
+		{
+			printf("Info: Master in CV - copying master current (%d mA) to slaves... ", meas.current_setpoint); fflush(stdout);
+			if(meas.current_setpoint < HW_MIN_CURRENT || meas.current_setpoint > HW_MAX_CURRENT ||
+			   (meas.mode == MODE_CHARGE && meas.current_setpoint < test->hw_charge.stop_current) ||
+			   (meas.mode == MODE_DISCHARGE && meas.current_setpoint > test->hw_discharge.stop_current))
+			{
+				printf("Illegal master current setpoint (%d mA), aborting copy.\n", meas.current_setpoint)
+				return -1;
+			}
+			int ch;
+			for(ch = 0; ch < test->num_channels; ch++)
+			{
+				printf(" %d  ", test->channels[ch]);
+				if(ch == test->master_channel_idx)
+					continue;
+				if(hw_set_current(test->channels[ch], meas.current_setpoint))
+				{
+					printf("Error: Cannot set current. ");
+				}
+			}
+			printf("\n");
+		}
+
 	}
 
 	if(test->cur_meas.num_hw_measurements != test->num_channels)
@@ -406,6 +439,16 @@ int measure_hw(test_t* test)
 	}
 
 	return 0;
+}
+
+int hw_set_current(int fd, int channel, int current)
+{
+	char buf[32];
+	if(channel < 0 || channel > MAX_ID || current < MIN_HW_CURRENT || current > MAX_HW_CURRENT)
+		return -2;
+	sprintf(buf, "@%u:SETI %d;", channel, current);
+	if(comm_autoretry(fd, buf, "SETI OK", NULL))
+		return -1;
 }
 
 int configure_hw(test_t* params, mode_t mode)
@@ -429,15 +472,12 @@ int configure_hw(test_t* params, mode_t mode)
 		int extra_vstop = 1000;
 		int extra_vcv = 500;
 		int ch;
-		for(ch = 0; ch < params->num_voltchannels; ch++)
+
+		if(i == params->master_channel_idx)
 		{
-			if(params->voltchannels[ch] == params->channels[i])
-			{
-				printf("Channel %d in in voltchannel list, going for extra_vstop = 0\n", params->channels[i]);
-				extra_vstop = 0;
-				extra_vcv = 0;
-				break;
-			}
+			printf("Info: Channel %d is master.\n", params->channels[i]);
+			extra_vstop = 0;
+			extra_vcv = 0;
 		}
 
 		if(mode == MODE_DISCHARGE)
