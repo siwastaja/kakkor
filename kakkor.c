@@ -3,6 +3,7 @@
 #include <malloc.h>
 #include <time.h>
 #include <unistd.h>
+#include <ncurses.h>
 
 #include "comm_uart.h"
 
@@ -26,6 +27,12 @@ const char* delim = ";";
 #define MAX_PARALLEL_CHANNELS 32
 #define MIN_ID 0
 #define MAX_ID 255
+
+#define tee(fp, fmt, ...) \
+ { \
+   printw(fmt, __VA_ARGS__); \
+   fprintf(fp, fmt, __VA_ARGS__); \
+ }
 
 typedef struct
 {
@@ -102,6 +109,25 @@ typedef struct
 
 } test_t;
 
+int start_log(test_t* t)
+{
+	char buf[512];
+	if(strlen(name) < 1 || strlen(name) > 450)
+	{
+		t->log = NULL;
+		t->verbose_log = NULL;
+		printf("Invalid test name, cannot open log files\n");
+		return -1;
+	}
+	sprintf(buf, "%s.log");
+	t->log = fopen(buf, "a");
+	sprintf(buf, "%s_verbose.log");
+	t->verbose_log = fopen(buf, "a");
+
+	fprintf(t->log, "time%smode%scc/cv%svoltage%scurrent%stemperature%scumul.Ah%scumul.Wh%sDCresistance\n",
+		delim,delim,delim,delim,delim,delim,delim,delim);
+}
+
 void log_measurement(measurement_t* m, test_t* t, int time)
 {
 	fprintf(t->log, "%u%s%s%s%s%s%.3f%s%.2f%s%.1f%s%.4f%s%.3f%s%.2f\n",
@@ -111,9 +137,10 @@ void log_measurement(measurement_t* m, test_t* t, int time)
 
 void print_measurement(measurement_t* m, int time)
 {
-	printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f R=%.2f\n",
+	printw("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f R=%.2f",
 		time, short_mode_names[m->mode], short_cccv_names[m->cccv],
 		m->voltage, m->current, m->temperature, m->cumul_ah, m->cumul_wh, m->resistance);
+	refresh();
 }
 
 #define HW_MIN_VOLTAGE 0
@@ -275,26 +302,26 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 void print_params(test_t* params)
 {
 	int i;
-	printf("%u parallel channels: ", params->num_channels);
+	fprintf(params->verbose_log, "%u parallel channels: ", params->num_channels);
 	for(i = 0; i < params->num_channels; i++)
-		printf("%u  ", params->channels[i]);
+		fprintf(params->verbose_log, "%u  ", params->channels[i]);
 
-	printf("Master channel will be: ", params->);
+	fprintf(params->verbose_log, "Master channel will be: ", params->);
 	for(i = 0; i < params->num_voltchannels; i++)
-		printf("%u  ", params->voltchannels[i]);
+		fprintf(params->verbose_log, "%u  ", params->voltchannels[i]);
 
-	printf("\nCHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
+	fprintf(params->verbose_log, "\nCHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
 		params->charge.current, params->charge.voltage, short_stop_mode_names[params->charge.stop_mode], params->charge.stop_current, params->charge.stop_voltage);
-	printf("DISCHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
+	fprintf(params->verbose_log, "DISCHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
 		params->discharge.current, params->discharge.voltage, short_stop_mode_names[params->discharge.stop_mode], params->discharge.stop_current, params->discharge.stop_voltage);
 
-	printf("HW CHARGE: current=%d   stopcurrent=%d   voltage=%d   stopvoltage=%d\n",
+	fprintf(params->verbose_log, "HW CHARGE: current=%d   stopcurrent=%d   voltage=%d   stopvoltage=%d\n",
 		params->hw_charge.current, params->hw_charge.stop_current, params->hw_charge.voltage, params->hw_charge.stop_voltage);
 
-	printf("HW DISCHARGE: current=%d   stopcurrent=%d   voltage=%d   stopvoltage=%d\n",
+	fprintf(params->verbose_log, "HW DISCHARGE: current=%d   stopcurrent=%d   voltage=%d   stopvoltage=%d\n",
 		params->hw_discharge.current, params->hw_discharge.stop_current, params->hw_discharge.voltage, params->hw_discharge.stop_voltage);
 
-	printf("cycling_start=%s   postcharge_cooldown=%u sec   postdischarge_cooldown=%u sec\n",
+	fprintf(params->verbose_log, "cycling_start=%s   postcharge_cooldown=%u sec   postdischarge_cooldown=%u sec\n",
 		mode_names[params->start_mode], params->postcharge_cooldown, params->postdischarge_cooldown);
 }
 
