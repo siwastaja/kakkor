@@ -3,7 +3,7 @@
 #include <malloc.h>
 #include <time.h>
 #include <unistd.h>
-#include <ncurses.h>
+//#include <ncurses.h>
 
 #include "comm_uart.h"
 
@@ -30,7 +30,7 @@ const char* delim = ";";
 
 #define tee(fp, fmt, ...) \
  { \
-   printw(fmt, __VA_ARGS__); \
+   printf(fmt, __VA_ARGS__); \
    fprintf(fp, fmt, __VA_ARGS__); \
  }
 
@@ -112,35 +112,53 @@ typedef struct
 int start_log(test_t* t)
 {
 	char buf[512];
-	if(strlen(name) < 1 || strlen(name) > 450)
+	if(strlen(t->name) < 1 || strlen(t->name) > 450)
 	{
 		t->log = NULL;
 		t->verbose_log = NULL;
 		printf("Invalid test name, cannot open log files\n");
 		return -1;
 	}
-	sprintf(buf, "%s.log");
+
+	sprintf(buf, "%s.log", t->name);
 	t->log = fopen(buf, "a");
-	sprintf(buf, "%s_verbose.log");
+	sprintf(buf, "%s_verbose.log", t->name);
 	t->verbose_log = fopen(buf, "a");
 
 	fprintf(t->log, "time%smode%scc/cv%svoltage%scurrent%stemperature%scumul.Ah%scumul.Wh%sDCresistance\n",
 		delim,delim,delim,delim,delim,delim,delim,delim);
+
+	fprintf(t->verbose_log, "time%smode%scc/cv%svoltage%scurrent%stemperature%scumul.Ah%scumul.Wh%sDCresistance\n",
+		delim,delim,delim,delim,delim,delim,delim,delim);
+
+	return 0;
 }
 
 void log_measurement(measurement_t* m, test_t* t, int time)
 {
-	fprintf(t->log, "%u%s%s%s%s%s%.3f%s%.2f%s%.1f%s%.4f%s%.3f%s%.2f\n",
+	if(t->log == NULL || t->verbose_log == NULL)
+	{
+		printf("Warn: log == NULL\n");
+		return;
+	}
+	fprintf(t->log, "%u%s%s%s%s%s%.3f%s%.2f%s%.3f%s%.4f%s%.3f%s%.2f\n",
 		time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
 		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance);
+
+	fprintf(t->verbose_log, "%u%s%s%s%s%s%.4f%s%.3f%s%.4f%s%.5f%s%.4f%s%.3f\n",
+		time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
+		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance);
+
+	fflush(t->log);
+	fflush(t->verbose_log);
 }
 
 void print_measurement(measurement_t* m, int time)
 {
-	printw("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f R=%.2f",
+	printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f R=%.2f\n",
 		time, short_mode_names[m->mode], short_cccv_names[m->cccv],
 		m->voltage, m->current, m->temperature, m->cumul_ah, m->cumul_wh, m->resistance);
-	refresh();
+//	refresh();
 }
 
 #define HW_MIN_VOLTAGE 0
@@ -245,6 +263,7 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 //	if(strstr(str, "MEAS") != str)
 //		return -1;
 
+	printf("dbg: parse_hw_measurement(): input: %s.\n", str);
 	memset(meas, 0, sizeof(hw_measurement_t));
 
 	if(strstr(str, "OFF"))
@@ -270,6 +289,7 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 			return -4;
 		if(meas->voltage < HW_MIN_VOLTAGE || meas->voltage > HW_MAX_VOLTAGE)
 			return -5;
+		printf("dbg: %u\n", meas->voltage);
 	}
 
 	if((p_val = strstr(str, "I=")))
@@ -290,7 +310,7 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 
 	if((p_val = strstr(str, "Iset=")))
 	{
-		if(sscanf(p_val, "I=%d", &meas->current_setpoint) != 1)
+		if(sscanf(p_val, "Iset=%d", &meas->current_setpoint) != 1)
 			return -10;
 		if(meas->current_setpoint < HW_MIN_CURRENT || meas->current_setpoint > HW_MAX_CURRENT)
 			return -11;
@@ -306,11 +326,10 @@ void print_params(test_t* params)
 	for(i = 0; i < params->num_channels; i++)
 		fprintf(params->verbose_log, "%u  ", params->channels[i]);
 
-	fprintf(params->verbose_log, "Master channel will be: ", params->);
-	for(i = 0; i < params->num_voltchannels; i++)
-		fprintf(params->verbose_log, "%u  ", params->voltchannels[i]);
+	fprintf(params->verbose_log, "Master channel will be: ");
+	fprintf(params->verbose_log, "%u\n", params->channels[params->master_channel_idx]);
 
-	fprintf(params->verbose_log, "\nCHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
+	fprintf(params->verbose_log, "CHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
 		params->charge.current, params->charge.voltage, short_stop_mode_names[params->charge.stop_mode], params->charge.stop_current, params->charge.stop_voltage);
 	fprintf(params->verbose_log, "DISCHARGE: current=%.3f   voltage=%.3f   stop_mode=%s   stop_current=%.3f   stop_voltage=%.3f\n",
 		params->discharge.current, params->discharge.voltage, short_stop_mode_names[params->discharge.stop_mode], params->discharge.stop_current, params->discharge.stop_voltage);
@@ -327,24 +346,14 @@ void print_params(test_t* params)
 
 int update_measurement(test_t* test, double elapsed_seconds)
 {
-	int ch;
-
-	double voltage_sum = 0.0;
-	double temperature_sum = 0.0;
-	for(ch = 0; ch < test->num_voltchannels; ch++)
-	{
-		int idx = get_channel_idx(test, test->voltchannels[ch]);
-//		printf("ch %d: idx %d, v=%d\n", ch, idx, test->cur_meas.hw_meas[idx].voltage);
-		voltage_sum += (double)test->cur_meas.hw_meas[idx].voltage / 1000.0;
-		temperature_sum += (double)test->cur_meas.hw_meas[idx].temperature / 65535.0;
-	}
-	voltage_sum /= (double)test->num_voltchannels;
-	test->cur_meas.voltage = voltage_sum;
-	test->cur_meas.temperature = temperature_sum / (double)test->num_voltchannels;
+	printf("upd_meas: %u , %u\n", test->master_channel_idx, test->cur_meas.hw_meas[test->master_channel_idx].voltage);
+	test->cur_meas.voltage = test->cur_meas.hw_meas[test->master_channel_idx].voltage / 1000.0;
+	test->cur_meas.temperature = test->cur_meas.hw_meas[test->master_channel_idx].temperature;
 
 	double current_sum = 0;
 	int num_channels_in_mode[4] = {0,0,0,0};
 	int num_channels_in_cccv[3] = {0,0,0};
+	int ch;
 
 	for(ch = 0; ch < test->num_channels; ch++)
 	{
@@ -393,11 +402,13 @@ int update_measurement(test_t* test, double elapsed_seconds)
 
 	test->cur_meas.current = current_sum;
 	test->cur_meas.cumul_ah += current_sum * elapsed_seconds / 3600.0;
-	test->cur_meas.cumul_wh += current_sum * voltage_sum * elapsed_seconds / 3600.0;
+	test->cur_meas.cumul_wh += current_sum * test->cur_meas.voltage * elapsed_seconds / 3600.0;
 
 
 	return 0;
 }
+
+int hw_set_current(int fd, int channel, int current);
 
 int measure_hw(test_t* test)
 {
@@ -440,7 +451,7 @@ int measure_hw(test_t* test)
 			   (meas.mode == MODE_CHARGE && meas.current_setpoint < test->hw_charge.stop_current) ||
 			   (meas.mode == MODE_DISCHARGE && meas.current_setpoint > test->hw_discharge.stop_current))
 			{
-				printf("Illegal master current setpoint (%d mA), aborting copy.\n", meas.current_setpoint)
+				printf("Illegal master current setpoint (%d mA), aborting copy.\n", meas.current_setpoint);
 				return -1;
 			}
 			int ch;
@@ -449,7 +460,7 @@ int measure_hw(test_t* test)
 				printf(" %d  ", test->channels[ch]);
 				if(ch == test->master_channel_idx)
 					continue;
-				if(hw_set_current(test->channels[ch], meas.current_setpoint))
+				if(hw_set_current(test->fd, test->channels[ch], meas.current_setpoint))
 				{
 					printf("Error: Cannot set current. ");
 				}
@@ -468,6 +479,9 @@ int measure_hw(test_t* test)
 	return 0;
 }
 
+#define MAX_HW_CURRENT 26000
+#define MIN_HW_CURRENT -26000
+
 int hw_set_current(int fd, int channel, int current)
 {
 	char buf[32];
@@ -476,6 +490,7 @@ int hw_set_current(int fd, int channel, int current)
 	sprintf(buf, "@%u:SETI %d;", channel, current);
 	if(comm_autoretry(fd, buf, "SETI OK", NULL))
 		return -1;
+	return 0;
 }
 
 int configure_hw(test_t* params, mode_t mode)
@@ -496,9 +511,8 @@ int configure_hw(test_t* params, mode_t mode)
 	uart_flush(params->fd);
 	for(i = 0; i < params->num_channels; i++)
 	{
-		int extra_vstop = 1000;
+		int extra_vstop = 500;
 		int extra_vcv = 500;
-		int ch;
 
 		if(i == params->master_channel_idx)
 		{
@@ -697,6 +711,7 @@ int parse_token(char* token, test_t* params)
 {
 	static mode_t param_state = MODE_OFF;
 	int n;
+	int itmp;
 	double ftmp;
 	if(strstr(token, "charge") == token)
 	{
@@ -751,21 +766,29 @@ int parse_token(char* token, test_t* params)
 		}
 		return 0;
 	}
-	else if(sscanf(token, "voltchannels=%u%n", &params->voltchannels[0], &n) == 1)
+	else if(sscanf(token, "masterchannel=%u", &itmp) == 1)
 	{
-		token+=n;
-		params->num_voltchannels = 1;
-		while(sscanf(token, ",%u%n", &params->voltchannels[params->num_voltchannels], &n) == 1)
+		if(itmp >= 0 && itmp < 10000)
 		{
-			token+=n;
-			params->num_voltchannels++;
-			if(params->num_voltchannels >= MAX_PARALLEL_CHANNELS)
+			int i;
+			for(i = 0; i < params->num_channels; i++)
 			{
-				printf("Too many parallel channels defined in voltchannels list\n");
-				return 1;
+				if(params->channels[i] == itmp)
+				{
+					params->master_channel_idx = i;
+					goto MASTER_CHANNEL_PARSE_OK;
+				}
 			}
+			printf("Masterchannel value not found in channel list.\n");
+			return 1;
+			MASTER_CHANNEL_PARSE_OK:
+			;
 		}
-		return 0;
+		else
+		{
+			printf("Illegal masterchannel value.\n");
+			return 1;
+		}
 	}
 	else if(sscanf(token, "current=%lf", &ftmp) == 1)
 	{
@@ -899,6 +922,8 @@ void update_test(test_t* test, int cur_time)
 		set_test_mode(test, MODE_OFF);
 	}
 	print_measurement(&test->cur_meas, cur_time);
+	log_measurement(&test->cur_meas, test, cur_time);
+
 	clear_hw_measurements(test);
 
 	if(test->cur_mode == MODE_OFF && test->next_mode == MODE_DISCHARGE)
@@ -923,7 +948,9 @@ void update_test(test_t* test, int cur_time)
 
 int prepare_test(test_t* test)
 {
+	char buf[200];
 	int ret;
+	int ch;
 
 	test->cur_mode = MODE_OFF;
 	test->next_mode = test->start_mode;
@@ -934,16 +961,19 @@ int prepare_test(test_t* test)
 		return -1;
 	}
 
-	uart_flush(test->fd);
-	comm_send(test->fd, "@1:OFF;");
-	if((ret = comm_expect(test->fd, "OFF OK")))
+	for(ch = 0; ch < test->num_channels; ch++)
 	{
-		printf("Test preparation failed; comm_expect for first OFF message returned %d\n", ret);
-		close_device(test->fd);
-		return -2;
+		uart_flush(test->fd);
+		sprintf(buf, "@%u:OFF;", test->channels[ch]);
+		comm_send(test->fd, buf);
+		if((ret = comm_expect(test->fd, "OFF OK")))
+		{
+			printf("Test preparation failed; comm_expect for first OFF message returned %d\n", ret);
+			close_device(test->fd);
+			return -2;
+		}
+		usleep(200000); // todo: fix HW to give "OFF OK" after blinking.
 	}
-
-	usleep(200000); // todo: fix HW to give "OFF OK" after blinking.
 
 
 	return 0;
@@ -1002,6 +1032,9 @@ int main(int argc, char** argv)
 	for(t=0; t < num_tests; t++)
 	{
 		init_test(&tests[t]);
+		tests[t].name = malloc(strlen(argv[t+1])+1);
+		strcpy(tests[t].name, argv[t+1]);
+		printf("dbg: test name will be: %s.\n", tests[t].name);
 		if(parse_test_file("defaults", &tests[t]))
 		{
 			free(tests);
@@ -1016,7 +1049,7 @@ int main(int argc, char** argv)
 
 	for(t = 0; t < num_tests; t++)
 	{
-		if(check_params(&tests[t]) || translate_settings(&tests[t]) || prepare_test(&tests[t]))
+		if(check_params(&tests[t]) || translate_settings(&tests[t]) || prepare_test(&tests[t]) || start_log(&tests[t]))
 		{
 			free(tests);
 			return 1;

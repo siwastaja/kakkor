@@ -125,7 +125,7 @@ int aread(int fd, char* buf, int n)
 #define COMM_SEPARATOR ';'
 #define MAX_READBUF_LEN 500
 
-#define REPLY_WAIT_TIMEOUT_MS 200
+#define REPLY_WAIT_TIMEOUT_MS 100
 #define REPLY_INTERREAD_TIMEOUT_MS 20
 
 int read_reply(int fd, char* outbuf, int maxbytes)
