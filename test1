@@ -1,7 +1,7 @@
-channels=10
+channels=10,7
 masterchannel=10
 startmode=charge
 
-charge current=15.0 voltage=3.60 stopcurrent=10.0
+charge current=10.0 voltage=3.41 stopcurrent=9.0
 
-discharge current=15.0 stopvoltage=3.16
+discharge current=10.0 stopvoltage=3.20

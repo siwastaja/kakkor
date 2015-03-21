@@ -125,11 +125,11 @@ int start_log(test_t* t)
 	sprintf(buf, "%s_verbose.log", t->name);
 	t->verbose_log = fopen(buf, "a");
 
-	fprintf(t->log, "time%smode%scc/cv%svoltage%scurrent%stemperature%scumul.Ah%scumul.Wh%sDCresistance\n",
-		delim,delim,delim,delim,delim,delim,delim,delim);
+	fprintf(t->log, "cycle%stime%smode%scc/cv%svoltage%scurrent%stemperature%scumul.Ah%scumul.Wh%sDCresistance\n",
+		delim,delim,delim,delim,delim,delim,delim,delim,delim);
 
-	fprintf(t->verbose_log, "time%smode%scc/cv%svoltage%scurrent%stemperature%scumul.Ah%scumul.Wh%sDCresistance\n",
-		delim,delim,delim,delim,delim,delim,delim,delim);
+	fprintf(t->verbose_log, "cycle%stime%smode%scc/cv%svoltage%scurrent%stemperature%scumul.Ah%scumul.Wh%sDCresistance\n",
+		delim,delim,delim,delim,delim,delim,delim,delim,delim);
 
 	return 0;
 }
@@ -141,12 +141,12 @@ void log_measurement(measurement_t* m, test_t* t, int time)
 		printf("Warn: log == NULL\n");
 		return;
 	}
-	fprintf(t->log, "%u%s%s%s%s%s%.3f%s%.2f%s%.3f%s%.4f%s%.3f%s%.2f\n",
-		time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
+	fprintf(t->log, "%u%s%u%s%s%s%s%s%.3f%s%.2f%s%.3f%s%.4f%s%.3f%s%.2f\n",
+		t->cycle_cnt, delim, time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
 		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance);
 
-	fprintf(t->verbose_log, "%u%s%s%s%s%s%.4f%s%.3f%s%.4f%s%.5f%s%.4f%s%.3f\n",
-		time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
+	fprintf(t->verbose_log, "%u%s%u%s%s%s%s%s%.4f%s%.3f%s%.4f%s%.5f%s%.4f%s%.3f\n",
+		t->cycle_cnt, delim, time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
 		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance);
 
 	fflush(t->log);
@@ -205,7 +205,10 @@ int set_test_mode(test_t* test, mode_t mode)
 		usleep(10000);
 		printf("INFO: Setting channel %d to mode %d\n", test->channels[i], mode);
 		if(set_channel_mode(test, test->channels[i], mode))
+		{
+			printf("Error setting channel mode!\n");
 			fail = -1;
+		}
 	}
 
 	test->cur_mode = mode;
@@ -263,7 +266,7 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 //	if(strstr(str, "MEAS") != str)
 //		return -1;
 
-	printf("dbg: parse_hw_measurement(): input: %s.\n", str);
+//	printf("dbg: parse_hw_measurement(): input: %s.\n", str);
 	memset(meas, 0, sizeof(hw_measurement_t));
 
 	if(strstr(str, "OFF"))
@@ -289,7 +292,7 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 			return -4;
 		if(meas->voltage < HW_MIN_VOLTAGE || meas->voltage > HW_MAX_VOLTAGE)
 			return -5;
-		printf("dbg: %u\n", meas->voltage);
+//		printf("dbg: %u\n", meas->voltage);
 	}
 
 	if((p_val = strstr(str, "I=")))
@@ -346,7 +349,7 @@ void print_params(test_t* params)
 
 int update_measurement(test_t* test, double elapsed_seconds)
 {
-	printf("upd_meas: %u , %u\n", test->master_channel_idx, test->cur_meas.hw_meas[test->master_channel_idx].voltage);
+//	printf("upd_meas: %u , %u\n", test->master_channel_idx, test->cur_meas.hw_meas[test->master_channel_idx].voltage);
 	test->cur_meas.voltage = test->cur_meas.hw_meas[test->master_channel_idx].voltage / 1000.0;
 	test->cur_meas.temperature = test->cur_meas.hw_meas[test->master_channel_idx].temperature;
 
@@ -457,9 +460,9 @@ int measure_hw(test_t* test)
 			int ch;
 			for(ch = 0; ch < test->num_channels; ch++)
 			{
-				printf(" %d  ", test->channels[ch]);
 				if(ch == test->master_channel_idx)
 					continue;
+				printf(" %d  ", test->channels[ch]);
 				if(hw_set_current(test->fd, test->channels[ch], meas.current_setpoint))
 				{
 					printf("Error: Cannot set current. ");
@@ -512,7 +515,7 @@ int configure_hw(test_t* params, mode_t mode)
 	for(i = 0; i < params->num_channels; i++)
 	{
 		int extra_vstop = 500;
-		int extra_vcv = 500;
+		int extra_vcv = 300;
 
 		if(i == params->master_channel_idx)
 		{
@@ -523,6 +526,8 @@ int configure_hw(test_t* params, mode_t mode)
 
 		if(mode == MODE_DISCHARGE)
 		{
+			extra_vstop += 200;
+			extra_vcv += 200;
 			extra_vstop *= -1;
 			extra_vcv *= -1;
 		}
@@ -576,13 +581,13 @@ int translate_settings(test_t* params)
 		params->hw_charge.voltage = (int)(params->charge.voltage*1000.0);
 		// In current stop mode, stop voltage will be set so that it's never met - HW does not use
 		// "stop modes" at all. Stop voltage will be used as a kind of safety measure.
-		params->hw_charge.stop_voltage = (int)((params->charge.voltage+0.5)*1000.0);
+		params->hw_charge.stop_voltage = (int)((params->charge.voltage+0.3)*1000.0);
 	}
 	else if(params->charge.stop_mode == STOP_MODE_VOLTAGE)
 	{
 		params->hw_charge.stop_voltage = (int)(params->charge.stop_voltage*1000.0);
 		// Same here - stop mode is achieved by having stop voltage lower than CV voltage.
-		params->hw_charge.voltage = (int)((params->charge.stop_voltage+0.5)*1000.0);
+		params->hw_charge.voltage = (int)((params->charge.stop_voltage+0.3)*1000.0);
 		params->hw_charge.stop_current = 1; // stop current will never be met.
 	}
 	else
@@ -596,12 +601,12 @@ int translate_settings(test_t* params)
 	{
 		params->hw_discharge.stop_current = -1*((int)(params->discharge.stop_current*1000.0/params->num_channels));
 		params->hw_discharge.voltage = (int)(params->discharge.voltage*1000.0);
-		params->hw_discharge.stop_voltage = (int)((params->discharge.voltage-0.5)*1000.0);
+		params->hw_discharge.stop_voltage = (int)((params->discharge.voltage-0.6)*1000.0);
 	}
 	else if(params->discharge.stop_mode == STOP_MODE_VOLTAGE)
 	{
 		params->hw_discharge.stop_voltage = (int)(params->discharge.stop_voltage*1000.0);
-		params->hw_discharge.voltage = (int)((params->discharge.stop_voltage-0.5)*1000.0);
+		params->hw_discharge.voltage = (int)((params->discharge.stop_voltage-0.6)*1000.0);
 		params->hw_discharge.stop_current = -1;
 	}
 	else
@@ -909,6 +914,7 @@ void update_test(test_t* test, int cur_time)
 	if(test->cur_meas.mode == MODE_OFF && test->cur_mode != MODE_OFF)
 	{
 		printf("Info: Cycle ended, setting test off.\n");
+		test->cycle_cnt++;
 		if(test->cur_mode == MODE_CHARGE)
 		{
 			test->cooldown_start_time = cur_time;
@@ -931,6 +937,9 @@ void update_test(test_t* test, int cur_time)
 		printf("Info: Starting discharge in %d seconds...    \r", test->cooldown_start_time + test->postcharge_cooldown - cur_time); fflush(stdout);
 		if(cur_time >= test->cooldown_start_time + test->postcharge_cooldown)
 		{
+			test->cur_meas.cumul_ah = 0.0;
+			test->cur_meas.cumul_wh = 0.0;
+
 			start_discharge(test);
 			sleep(1);
 		}
@@ -940,6 +949,9 @@ void update_test(test_t* test, int cur_time)
 		printf("Info: Starting charge in %d seconds...    \r", test->cooldown_start_time + test->postdischarge_cooldown - cur_time); fflush(stdout);
 		if(cur_time >= test->cooldown_start_time + test->postdischarge_cooldown)
 		{
+			test->cur_meas.cumul_ah = 0.0;
+			test->cur_meas.cumul_wh = 0.0;
+
 			start_charge(test);
 			sleep(1);
 		}
@@ -1034,7 +1046,7 @@ int main(int argc, char** argv)
 		init_test(&tests[t]);
 		tests[t].name = malloc(strlen(argv[t+1])+1);
 		strcpy(tests[t].name, argv[t+1]);
-		printf("dbg: test name will be: %s.\n", tests[t].name);
+//		printf("dbg: test name will be: %s.\n", tests[t].name);
 		if(parse_test_file("defaults", &tests[t]))
 		{
 			free(tests);
