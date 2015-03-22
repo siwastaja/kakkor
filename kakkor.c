@@ -74,6 +74,8 @@ typedef struct
 	double cumul_ah;
 	double cumul_wh;
 	double resistance;
+	int start_time;
+
 } measurement_t;
 
 typedef struct
@@ -95,7 +97,6 @@ typedef struct
 
 	measurement_t cur_meas;
 
-	int start_time;
 	int postcharge_cooldown;
 	int postdischarge_cooldown;
 	int cooldown_start_time;
@@ -131,6 +132,8 @@ int start_log(test_t* t)
 	fprintf(t->verbose_log, "cycle%stime%smode%scc/cv%svoltage%scurrent%stemperature%scumul.Ah%scumul.Wh%sDCresistance\n",
 		delim,delim,delim,delim,delim,delim,delim,delim,delim);
 
+	fflush(t->log);
+	fflush(t->verbose_log);
 	return 0;
 }
 
@@ -170,7 +173,7 @@ void print_measurement(measurement_t* m, int time)
 
 int set_channel_mode(test_t* test, int channel, mode_t mode)
 {
-	usleep(50000);
+	usleep(10000);
 	if(mode != MODE_OFF && mode != MODE_CHARGE && mode != MODE_DISCHARGE)
 	{
 		printf("Error: invalid mode requested (%d)!\n", mode);
@@ -203,7 +206,7 @@ int set_test_mode(test_t* test, mode_t mode)
 	for(i = 0; i < test->num_channels; i++)
 	{
 		usleep(10000);
-		printf("INFO: Setting channel %d to mode %d\n", test->channels[i], mode);
+//		printf("INFO: Setting channel %d to mode %d\n", test->channels[i], mode);
 		if(set_channel_mode(test, test->channels[i], mode))
 		{
 			printf("Error setting channel mode!\n");
@@ -345,6 +348,9 @@ void print_params(test_t* params)
 
 	fprintf(params->verbose_log, "cycling_start=%s   postcharge_cooldown=%u sec   postdischarge_cooldown=%u sec\n",
 		mode_names[params->start_mode], params->postcharge_cooldown, params->postdischarge_cooldown);
+	fflush(params->log);
+	fflush(params->verbose_log);
+
 }
 
 int update_measurement(test_t* test, double elapsed_seconds)
@@ -395,8 +401,8 @@ int update_measurement(test_t* test, double elapsed_seconds)
 	if(num_channels_in_mode[MODE_OFF] > 0)
 		test->cur_meas.mode = MODE_OFF;
 
-	printf("num_channels_in_off = %d, num_channels_in_charge = %d, num_channels_in_discharge = %d\n", num_channels_in_mode[MODE_OFF], num_channels_in_mode[MODE_CHARGE], num_channels_in_mode[MODE_DISCHARGE]);
-	printf("------> MODE = %s\n", mode_names[test->cur_meas.mode]);
+//	printf("num_channels_in_off = %d, num_channels_in_charge = %d, num_channels_in_discharge = %d\n", num_channels_in_mode[MODE_OFF], num_channels_in_mode[MODE_CHARGE], num_channels_in_mode[MODE_DISCHARGE]);
+//	printf("------> MODE = %s\n", mode_names[test->cur_meas.mode]);
 
 	if(num_channels_in_cccv[MODE_CV])
 		test->cur_meas.cccv = MODE_CV;
@@ -432,7 +438,8 @@ int measure_hw(test_t* test)
 			return -1;
 		}
 
-		printf("measure_hw: got reply: %s\n", rxbuf);
+		printf("measure_hw: from %3u: %s\n", test->channels[i], rxbuf);
+		fprintf(test->verbose_log, "measure_hw: from %3u: %s\n", test->channels[i], rxbuf);
 
 		hw_measurement_t meas;
 		if((ret = parse_hw_measurement(&meas, rxbuf)))
@@ -519,15 +526,22 @@ int configure_hw(test_t* params, mode_t mode)
 
 		if(i == params->master_channel_idx)
 		{
-			printf("Info: Channel %d is master.\n", params->channels[i]);
+//			printf("Info: Channel %d is master.\n", params->channels[i]);
 			extra_vstop = 0;
 			extra_vcv = 0;
+
+		}
+		else
+		{
+			if(mode == MODE_DISCHARGE)
+			{
+				extra_vstop += 200;
+				extra_vcv += 200;
+			}
 		}
 
 		if(mode == MODE_DISCHARGE)
 		{
-			extra_vstop += 200;
-			extra_vcv += 200;
 			extra_vstop *= -1;
 			extra_vcv *= -1;
 		}
@@ -537,35 +551,35 @@ int configure_hw(test_t* params, mode_t mode)
 		if(comm_autoretry(params->fd, buf, "OFF OK", NULL))
 			return -1;
 
-		usleep(100000);
+		usleep(200000);
 
 		sprintf(buf, "@%u:SETI %d;", params->channels[i], settings->current);
-		printf("      %s\n", buf);
+		printf("      %s", buf); fflush(stdout);
 		if(comm_autoretry(params->fd, buf, "SETI OK", NULL))
 			return -1;
 
-		usleep(100000);
+		usleep(50000);
 
 		sprintf(buf, "@%u:SETV %d;", params->channels[i], settings->voltage+extra_vcv);
-		printf("      %s\n", buf);
+		printf("      %s", buf); fflush(stdout);
 		if(comm_autoretry(params->fd, buf, "SETV OK", NULL))
 			return -1;
 
-		usleep(100000);
+		usleep(50000);
 
 		sprintf(buf, "@%u:SETISTOP %d;", params->channels[i], settings->stop_current);
-		printf("      %s\n", buf);
+		printf("      %s", buf); fflush(stdout);
 		if(comm_autoretry(params->fd, buf, "SETISTOP OK", NULL))
 			return -1;
 
-		usleep(100000);
+		usleep(50000);
 
 		sprintf(buf, "@%u:SETVSTOP %d;", params->channels[i], settings->stop_voltage+extra_vstop);
 		printf("      %s\n", buf);
 		if(comm_autoretry(params->fd, buf, "SETVSTOP OK", NULL))
 			return -1;
 
-		usleep(100000);
+		usleep(50000);
 
 	}
 
@@ -606,6 +620,9 @@ int translate_settings(test_t* params)
 	else if(params->discharge.stop_mode == STOP_MODE_VOLTAGE)
 	{
 		params->hw_discharge.stop_voltage = (int)(params->discharge.stop_voltage*1000.0);
+
+//		printf("dbg: TRANSLATE -- %s : %u\n", params->name, params->hw_discharge.stop_voltage);
+
 		params->hw_discharge.voltage = (int)((params->discharge.stop_voltage-0.6)*1000.0);
 		params->hw_discharge.stop_current = -1;
 	}
@@ -795,6 +812,18 @@ int parse_token(char* token, test_t* params)
 			return 1;
 		}
 	}
+	else if(sscanf(token, "startcycle=%u", &itmp) == 1)
+	{
+		if(itmp >= 0 && itmp < 100000)
+		{
+			params->cycle_cnt = itmp;
+		}
+		else
+		{
+			printf("Illegal masterchannel value.\n");
+			return 1;
+		}
+	}
 	else if(sscanf(token, "current=%lf", &ftmp) == 1)
 	{
 		if(param_state == MODE_CHARGE)
@@ -914,7 +943,6 @@ void update_test(test_t* test, int cur_time)
 	if(test->cur_meas.mode == MODE_OFF && test->cur_mode != MODE_OFF)
 	{
 		printf("Info: Cycle ended, setting test off.\n");
-		test->cycle_cnt++;
 		if(test->cur_mode == MODE_CHARGE)
 		{
 			test->cooldown_start_time = cur_time;
@@ -924,11 +952,14 @@ void update_test(test_t* test, int cur_time)
 		{
 			test->cooldown_start_time = cur_time;
 			test->next_mode = MODE_CHARGE;
+			test->cycle_cnt++;
 		}
 		set_test_mode(test, MODE_OFF);
 	}
-	print_measurement(&test->cur_meas, cur_time);
-	log_measurement(&test->cur_meas, test, cur_time);
+
+	printf("test=%s cycle=%u ", test->name, test->cycle_cnt);
+	print_measurement(&test->cur_meas, cur_time - test->cur_meas.start_time);
+	log_measurement(&test->cur_meas, test, cur_time - test->cur_meas.start_time);
 
 	clear_hw_measurements(test);
 
@@ -937,6 +968,8 @@ void update_test(test_t* test, int cur_time)
 		printf("Info: Starting discharge in %d seconds...    \r", test->cooldown_start_time + test->postcharge_cooldown - cur_time); fflush(stdout);
 		if(cur_time >= test->cooldown_start_time + test->postcharge_cooldown)
 		{
+			printf("\n");
+			test->cur_meas.start_time = cur_time;
 			test->cur_meas.cumul_ah = 0.0;
 			test->cur_meas.cumul_wh = 0.0;
 
@@ -949,6 +982,8 @@ void update_test(test_t* test, int cur_time)
 		printf("Info: Starting charge in %d seconds...    \r", test->cooldown_start_time + test->postdischarge_cooldown - cur_time); fflush(stdout);
 		if(cur_time >= test->cooldown_start_time + test->postdischarge_cooldown)
 		{
+			printf("\n");
+			test->cur_meas.start_time = cur_time;
 			test->cur_meas.cumul_ah = 0.0;
 			test->cur_meas.cumul_wh = 0.0;
 
@@ -966,7 +1001,7 @@ int prepare_test(test_t* test)
 
 	test->cur_mode = MODE_OFF;
 	test->next_mode = test->start_mode;
-	test->cooldown_start_time = -999999; // this enforces the test to start
+	test->cooldown_start_time = -999999; // this forces the test to start
 	if((test->fd = open_device(test->device_name)) < 0)
 	{
 		printf("Error: open_device returned %d\n", test->fd);
@@ -1012,7 +1047,7 @@ void run(int num_tests, test_t* tests)
 		int t;
 		for(t=0; t<num_tests; t++)
 		{
-			update_test(&tests[0], cur_time);
+			update_test(&tests[t], cur_time);
 		}
 	}
 
@@ -1046,7 +1081,7 @@ int main(int argc, char** argv)
 		init_test(&tests[t]);
 		tests[t].name = malloc(strlen(argv[t+1])+1);
 		strcpy(tests[t].name, argv[t+1]);
-//		printf("dbg: test name will be: %s.\n", tests[t].name);
+		printf("dbg: test name will be: %s.\n", tests[t].name);
 		if(parse_test_file("defaults", &tests[t]))
 		{
 			free(tests);

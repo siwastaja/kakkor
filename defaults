@@ -1,2 +1,3 @@
 device=/dev/ttyUSB0
 startmode=charge
+startcycle=0
