@@ -735,6 +735,7 @@ int parse_token(char* token, test_t* params)
 	int n;
 	int itmp;
 	double ftmp;
+	char ctmp;
 	if(strstr(token, "charge") == token)
 	{
 		param_state = MODE_CHARGE;
@@ -871,6 +872,21 @@ int parse_token(char* token, test_t* params)
 			printf("stopvoltage token without charge/discharge keyword before.\n");
 			return 1;
 		}
+	}
+	else if((sscanf(token, "cooldown=%d%c", &itmp, &ctmp) == 2) && (ctmp == 's' || ctmp == 'S' || ctmp == 'm' || ctmp == 'M'))
+	{
+		if(ctmp == 'm' || ctmp == 'M')
+			itmp *= 60;
+
+		if(param_state == MODE_CHARGE)
+			params->postcharge_cooldown = itmp;
+		else if(param_state == MODE_DISCHARGE)
+			params->postdischarge_cooldown = itmp;
+		else
+		{
+			printf("Warning: global (non-charge/discharge) cooldown token ignored.\n");
+		}
+
 	}
 	else
 	{
@@ -1019,7 +1035,7 @@ int prepare_test(test_t* test)
 			close_device(test->fd);
 			return -2;
 		}
-		usleep(200000); // todo: fix HW to give "OFF OK" after blinking.
+//		usleep(200000); // todo: verify that this indeed is no longer necessary
 	}
 
 
@@ -1049,6 +1065,7 @@ void run(int num_tests, test_t* tests)
 		{
 			update_test(&tests[t], cur_time);
 		}
+		printf("\n");
 	}
 
 }
@@ -1057,16 +1074,6 @@ void run(int num_tests, test_t* tests)
 
 int main(int argc, char** argv)
 {
-/*	test_t test1;
-	init_test(&test1);
-	parse_test_file("test1", &test1);
-	check_params(&test1);
-	translate_settings(&test1);
-	print_params(&test1);
-	configure_hw(&test1, MODE_CHARGE);
-	configure_hw(&test1, MODE_DISCHARGE);
-*/
-
 	int num_tests = argc-1;
 	if(num_tests < 1)
 	{
@@ -1081,7 +1088,6 @@ int main(int argc, char** argv)
 		init_test(&tests[t]);
 		tests[t].name = malloc(strlen(argv[t+1])+1);
 		strcpy(tests[t].name, argv[t+1]);
-		printf("dbg: test name will be: %s.\n", tests[t].name);
 		if(parse_test_file("defaults", &tests[t]))
 		{
 			free(tests);
