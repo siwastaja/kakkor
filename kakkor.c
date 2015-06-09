@@ -101,6 +101,8 @@ typedef struct
 	int postdischarge_cooldown;
 	int cooldown_start_time;
 
+	double temperature_stop;
+
 	int cycle_cnt;
 	mode_t start_mode;
 	mode_t cur_mode;
@@ -108,7 +110,57 @@ typedef struct
 	FILE* log;
 	FILE* verbose_log;
 
+	int resistance_on;
+	int resistance_interval;
+	int resistance_interval_offset;
+	int resistance_first_pulse_len;
+	int resistance_second_pulse_len;
+	double resistance_base_current_mul;
+	double resistance_first_pulse_current_mul;
+	double resistance_second_pulse_current_mul;
+	int resistance_state;
+	double resistance_last_v;
+	int kludgimus_maximus;
 } test_t;
+
+int log_read_cycle_num(char* filename)
+{
+	int cycle_num = 0;
+	FILE* logfile = fopen(filename, "r");
+	if(!logfile)
+	{
+		printf("dbg: logfile NULL\n");
+		return 0;
+	}
+
+	fseek(logfile, -20, SEEK_END);
+
+	int timeout = 1000;
+	while(fgetc(logfile) != '\n')
+	{
+		fseek(logfile, -2, SEEK_CUR);
+		if(!(timeout--))
+		{
+			printf("log_read_cycle_num: Error: cannot find last line feed");
+			fclose(logfile);
+			return 0;
+		}
+	}
+
+	fscanf(logfile, " %u;", &cycle_num);
+	if(cycle_num < 0 || cycle_num > 100000)
+	{
+		printf("log_read_cycle_num: Error: got invalid cycle number\n");
+		cycle_num = 0;
+	}
+
+	printf("dbg: cycle_num = %d\n", cycle_num);
+
+	fclose(logfile);
+	return cycle_num;
+
+}
+
 
 int start_log(test_t* t)
 {
@@ -122,6 +174,9 @@ int start_log(test_t* t)
 	}
 
 	sprintf(buf, "%s.log", t->name);
+
+	t->cycle_cnt = log_read_cycle_num(buf);
+
 	t->log = fopen(buf, "a");
 	sprintf(buf, "%s_verbose.log", t->name);
 	t->verbose_log = fopen(buf, "a");
@@ -146,11 +201,11 @@ void log_measurement(measurement_t* m, test_t* t, int time)
 	}
 	fprintf(t->log, "%u%s%u%s%s%s%s%s%.3f%s%.2f%s%.3f%s%.4f%s%.3f%s%.2f\n",
 		t->cycle_cnt, delim, time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
-		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance);
+		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance*1000.0);
 
 	fprintf(t->verbose_log, "%u%s%u%s%s%s%s%s%.4f%s%.3f%s%.4f%s%.5f%s%.4f%s%.3f\n",
 		t->cycle_cnt, delim, time, delim, short_mode_names[m->mode], delim, short_cccv_names[m->cccv], delim,
-		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance);
+		m->voltage, delim, m->current, delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh, delim, m->resistance*1000.0);
 
 	fflush(t->log);
 	fflush(t->verbose_log);
@@ -158,16 +213,22 @@ void log_measurement(measurement_t* m, test_t* t, int time)
 
 void print_measurement(measurement_t* m, int time)
 {
-	printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f R=%.2f\n",
-		time, short_mode_names[m->mode], short_cccv_names[m->cccv],
-		m->voltage, m->current, m->temperature, m->cumul_ah, m->cumul_wh, m->resistance);
+	if(m->resistance != 0.0)
+		printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f                           R measured = %.2f\n",
+			time, short_mode_names[m->mode], short_cccv_names[m->cccv],
+			m->voltage, m->current, m->temperature, m->cumul_ah, m->cumul_wh, m->resistance*1000.0);
+	else
+		printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f\n",
+			time, short_mode_names[m->mode], short_cccv_names[m->cccv],
+			m->voltage, m->current, m->temperature, m->cumul_ah, m->cumul_wh);
+
 //	refresh();
 }
 
 #define HW_MIN_VOLTAGE 0
 #define HW_MAX_VOLTAGE 7000
-#define HW_MIN_CURRENT -32000
-#define HW_MAX_CURRENT 32000
+#define HW_MIN_CURRENT -27000
+#define HW_MAX_CURRENT 27000
 #define HW_MIN_TEMPERATURE 0
 #define HW_MAX_TEMPERATURE 65535
 
@@ -348,6 +409,13 @@ void print_params(test_t* params)
 
 	fprintf(params->verbose_log, "cycling_start=%s   postcharge_cooldown=%u sec   postdischarge_cooldown=%u sec\n",
 		mode_names[params->start_mode], params->postcharge_cooldown, params->postdischarge_cooldown);
+
+	fprintf(params->verbose_log, "temperature_stop=%f\n", params->temperature_stop);
+
+	fprintf(params->verbose_log, "resistance_on=%d, interval=%d, interval_offset=%d first_pulse=%d, second_pulse=%d, base_curr=%f, first_curr=%f, second_curr=%f\n",
+		params->resistance_on, params->resistance_interval, params->resistance_interval_offset, params->resistance_first_pulse_len, params->resistance_second_pulse_len, 
+ 		params->resistance_base_current_mul, params->resistance_first_pulse_current_mul, params->resistance_second_pulse_current_mul);
+
 	fflush(params->log);
 	fflush(params->verbose_log);
 
@@ -419,7 +487,7 @@ int update_measurement(test_t* test, double elapsed_seconds)
 
 int hw_set_current(int fd, int channel, int current);
 
-int measure_hw(test_t* test)
+int measure_hw(test_t* test, int horrible_kludge)
 {
 	char txbuf[100];
 	char expectbuf[100];
@@ -454,7 +522,7 @@ int measure_hw(test_t* test)
 			return -1;
 		}
 
-		if(i == test->master_channel_idx && meas.cccv == MODE_CV)
+		if(i == test->master_channel_idx && meas.cccv == MODE_CV && !horrible_kludge)
 		{
 			printf("Info: Master in CV - copying master current (%d mA) to slaves... ", meas.current_setpoint); fflush(stdout);
 			if(meas.current_setpoint < HW_MIN_CURRENT || meas.current_setpoint > HW_MAX_CURRENT ||
@@ -489,8 +557,8 @@ int measure_hw(test_t* test)
 	return 0;
 }
 
-#define MAX_HW_CURRENT 26000
-#define MIN_HW_CURRENT -26000
+#define MAX_HW_CURRENT 25000
+#define MIN_HW_CURRENT -25000
 
 int hw_set_current(int fd, int channel, int current)
 {
@@ -500,6 +568,20 @@ int hw_set_current(int fd, int channel, int current)
 	sprintf(buf, "@%u:SETI %d;", channel, current);
 	if(comm_autoretry(fd, buf, "SETI OK", NULL))
 		return -1;
+	return 0;
+}
+
+int test_set_current(test_t* test, double current)
+{
+	int ch;
+	for(ch = 0; ch < test->num_channels; ch++)
+	{
+		if(hw_set_current(test->fd, test->channels[ch], current*1000.0/(double)test->num_channels))
+		{
+			printf("Error: Cannot set current. ");
+			return -1;
+		}
+	}
 	return 0;
 }
 
@@ -521,8 +603,8 @@ int configure_hw(test_t* params, mode_t mode)
 	uart_flush(params->fd);
 	for(i = 0; i < params->num_channels; i++)
 	{
-		int extra_vstop = 500;
-		int extra_vcv = 300;
+		int extra_vstop = 0;
+		int extra_vcv = 200;
 
 		if(i == params->master_channel_idx)
 		{
@@ -535,7 +617,7 @@ int configure_hw(test_t* params, mode_t mode)
 		{
 			if(mode == MODE_DISCHARGE)
 			{
-				extra_vstop += 200;
+				extra_vstop += 500;
 				extra_vcv += 200;
 			}
 		}
@@ -548,38 +630,43 @@ int configure_hw(test_t* params, mode_t mode)
 
 		printf("Info: configuring channel %u\n", params->channels[i]);
 		sprintf(buf, "@%u:OFF;", params->channels[i]);
+		fprintf(params->verbose_log, "    %s", buf);
 		if(comm_autoretry(params->fd, buf, "OFF OK", NULL))
 			return -1;
 
-		usleep(200000);
+		usleep(20000);
 
 		sprintf(buf, "@%u:SETI %d;", params->channels[i], settings->current);
 		printf("      %s", buf); fflush(stdout);
+		fprintf(params->verbose_log, "    %s", buf);
 		if(comm_autoretry(params->fd, buf, "SETI OK", NULL))
 			return -1;
 
-		usleep(50000);
+		usleep(20000);
 
 		sprintf(buf, "@%u:SETV %d;", params->channels[i], settings->voltage+extra_vcv);
 		printf("      %s", buf); fflush(stdout);
+		fprintf(params->verbose_log, "    %s", buf);
 		if(comm_autoretry(params->fd, buf, "SETV OK", NULL))
 			return -1;
 
-		usleep(50000);
+		usleep(20000);
 
 		sprintf(buf, "@%u:SETISTOP %d;", params->channels[i], settings->stop_current);
 		printf("      %s", buf); fflush(stdout);
+		fprintf(params->verbose_log, "    %s", buf);
 		if(comm_autoretry(params->fd, buf, "SETISTOP OK", NULL))
 			return -1;
 
-		usleep(50000);
+		usleep(20000);
 
 		sprintf(buf, "@%u:SETVSTOP %d;", params->channels[i], settings->stop_voltage+extra_vstop);
 		printf("      %s\n", buf);
+		fprintf(params->verbose_log, "    %s\n", buf);
 		if(comm_autoretry(params->fd, buf, "SETVSTOP OK", NULL))
 			return -1;
 
-		usleep(50000);
+		usleep(20000);
 
 	}
 
@@ -588,20 +675,20 @@ int configure_hw(test_t* params, mode_t mode)
 
 int translate_settings(test_t* params)
 {
-	params->hw_charge.current = (int)(params->charge.current*1000.0/params->num_channels);
+	params->hw_charge.current = (int)( ((params->resistance_on)?(params->resistance_base_current_mul):(1.0)) * params->charge.current*1000.0/params->num_channels);
 	if(params->charge.stop_mode == STOP_MODE_CURRENT)
 	{
 		params->hw_charge.stop_current = (int)(params->charge.stop_current*1000.0/params->num_channels);
 		params->hw_charge.voltage = (int)(params->charge.voltage*1000.0);
 		// In current stop mode, stop voltage will be set so that it's never met - HW does not use
 		// "stop modes" at all. Stop voltage will be used as a kind of safety measure.
-		params->hw_charge.stop_voltage = (int)((params->charge.voltage+0.3)*1000.0);
+		params->hw_charge.stop_voltage = (int)((params->charge.voltage+0.13)*1000.0);
 	}
 	else if(params->charge.stop_mode == STOP_MODE_VOLTAGE)
 	{
 		params->hw_charge.stop_voltage = (int)(params->charge.stop_voltage*1000.0);
 		// Same here - stop mode is achieved by having stop voltage lower than CV voltage.
-		params->hw_charge.voltage = (int)((params->charge.stop_voltage+0.3)*1000.0);
+		params->hw_charge.voltage = (int)((params->charge.stop_voltage+0.13)*1000.0);
 		params->hw_charge.stop_current = 1; // stop current will never be met.
 	}
 	else
@@ -610,12 +697,12 @@ int translate_settings(test_t* params)
 		return 1;
 	}
 
-	params->hw_discharge.current = -1*((int)(params->discharge.current*1000.0/params->num_channels));
+	params->hw_discharge.current = -1*((int)( ((params->resistance_on)?(params->resistance_base_current_mul):(1.0)) * params->discharge.current*1000.0/params->num_channels));
 	if(params->discharge.stop_mode == STOP_MODE_CURRENT)
 	{
 		params->hw_discharge.stop_current = -1*((int)(params->discharge.stop_current*1000.0/params->num_channels));
 		params->hw_discharge.voltage = (int)(params->discharge.voltage*1000.0);
-		params->hw_discharge.stop_voltage = (int)((params->discharge.voltage-0.6)*1000.0);
+		params->hw_discharge.stop_voltage = (int)((params->discharge.voltage-0.5)*1000.0);
 	}
 	else if(params->discharge.stop_mode == STOP_MODE_VOLTAGE)
 	{
@@ -623,7 +710,7 @@ int translate_settings(test_t* params)
 
 //		printf("dbg: TRANSLATE -- %s : %u\n", params->name, params->hw_discharge.stop_voltage);
 
-		params->hw_discharge.voltage = (int)((params->discharge.stop_voltage-0.6)*1000.0);
+		params->hw_discharge.voltage = (int)((params->discharge.stop_voltage-0.5)*1000.0);
 		params->hw_discharge.stop_current = -1;
 	}
 	else
@@ -719,6 +806,29 @@ int check_params(test_t* params)
 			return -1;
 		}
 	}
+
+	if(params->resistance_on)
+	{
+		if(params->resistance_interval < 20 || params->resistance_interval > 600)
+		{
+			printf("ERROR: Illegal resistance_interval (%u)\n", params->resistance_interval);
+			return -1;
+		}
+		params->resistance_base_current_mul = 1.0 /
+			(((double)(params->resistance_first_pulse_len)*(params->resistance_first_pulse_current_mul) +
+			(double)(params->resistance_second_pulse_len)*(params->resistance_second_pulse_current_mul) +
+			(double)(params->resistance_interval - params->resistance_first_pulse_len - params->resistance_second_pulse_len)*1.0)
+			/(double)(params->resistance_interval));
+
+		if(params->resistance_base_current_mul < 1.0 || params->resistance_base_current_mul > 1.2)
+		{
+			printf("ERROR: Inferred resistance_base_current_mul out of range (%f)\n", params->resistance_base_current_mul);
+			return -1;
+		}
+
+		printf("INFO: Resistance measurement on, inferring resistance_base_current_mul = %f\n", params->resistance_base_current_mul);
+	}
+
 
 	if(check_base_settings("Charge", &params->charge))
 		return -1;
@@ -873,6 +983,17 @@ int parse_token(char* token, test_t* params)
 			return 1;
 		}
 	}
+	else if(sscanf(token, "temperaturestop<%lf", &ftmp) == 1)
+	{
+		if(ftmp	< 1.0 || ftmp > 65535.0)
+		{
+			printf("Warning: ignored illegal temperaturestop value.\n");
+		}
+		else
+		{
+			params->temperature_stop = ftmp;
+		}
+	}
 	else if((sscanf(token, "cooldown=%d%c", &itmp, &ctmp) == 2) && (ctmp == 's' || ctmp == 'S' || ctmp == 'm' || ctmp == 'M'))
 	{
 		if(ctmp == 'm' || ctmp == 'M')
@@ -887,6 +1008,54 @@ int parse_token(char* token, test_t* params)
 			printf("Warning: global (non-charge/discharge) cooldown token ignored.\n");
 		}
 
+	}
+	else if(strstr(token, "resistance=on") == token)
+	{
+		params->resistance_on=1;
+		return 0;
+	}
+	else if(strstr(token, "resistance=off") == token)
+	{
+		params->resistance_on=0;
+		return 0;
+	}
+	else if((sscanf(token, "resistanceinterval=%d%c", &itmp, &ctmp) == 2) && (ctmp == 's' || ctmp == 'S' || ctmp == 'm' || ctmp == 'M'))
+	{
+		if(ctmp == 'm' || ctmp == 'M')
+			itmp *= 60;
+
+		if(itmp < 20 || itmp > 600)
+			printf("Warning: ignored out-of-range resistanceinterval (%u)\n", itmp);
+		else
+		{
+			params->resistance_interval = itmp;
+			params->resistance_interval_offset = itmp/2;
+		}
+	}
+	else if((sscanf(token, "resistancepulse=%d%c", &itmp, &ctmp) == 2) && (ctmp == 's' || ctmp == 'S' || ctmp == 'm' || ctmp == 'M'))
+	{
+		if(ctmp == 'm' || ctmp == 'M')
+			itmp *= 60;
+
+		if(itmp < 6 || itmp > 60)
+			printf("Warning: ignored out-of-range resistancepulse (%u)\n", itmp);
+		else
+		{
+			params->resistance_first_pulse_len = 3;
+			params->resistance_second_pulse_len = itmp-3;
+		}
+	}
+	else if(sscanf(token, "resistancecurrent=%lf", &ftmp) == 1)
+	{
+		if(ftmp < 0.5 || ftmp > 0.95)
+		{
+			printf("Warning: ignoring out-of-range resistancecurrent (%f)\n", ftmp);
+		}
+		else
+		{
+			params->resistance_second_pulse_current_mul = ftmp;
+			params->resistance_first_pulse_current_mul = ftmp * 0.85;
+		}
 	}
 	else
 	{
@@ -954,8 +1123,25 @@ int start_charge(test_t* test)
 
 void update_test(test_t* test, int cur_time)
 {
-	measure_hw(test);
+	if(test->kludgimus_maximus)
+	{
+//		printf("Warning: kludge in use. todo: fix HW not to give false CV information (set_current() -> also set i_override\n");
+	}
+	measure_hw(test, test->kludgimus_maximus);
+	if(test->kludgimus_maximus) test->kludgimus_maximus--;
 	update_measurement(test, 1);
+
+	if(test->cur_meas.temperature < test->temperature_stop && (test->cur_mode != MODE_OFF || test->next_mode != MODE_OFF))
+	{
+		printf("Info: Test %s overtemperature, stopping test.\n", test->name);
+		fprintf(test->verbose_log, "Info: Test %s overtemperature, stopping test.\n", test->name);
+		if(set_test_mode(test, MODE_OFF))
+		{
+			printf("Emergency: cannot set test mode.\n");
+		}
+		test->next_mode = MODE_OFF;
+	}
+
 	if(test->cur_meas.mode == MODE_OFF && test->cur_mode != MODE_OFF)
 	{
 		printf("Info: Cycle ended, setting test off.\n");
@@ -973,11 +1159,95 @@ void update_test(test_t* test, int cur_time)
 		set_test_mode(test, MODE_OFF);
 	}
 
+
+	if(test->resistance_on)
+	{
+		int tim = cur_time - test->cur_meas.start_time;
+		int res_cycle_time = tim % test->resistance_interval;
+
+		fprintf(test->verbose_log, "DBG: res_cycle = %d\n", res_cycle_time);
+		// Allow 3 seconds to start resistance cycle measurement -- otherwise forget about it.
+		if(res_cycle_time >= test->resistance_interval_offset && res_cycle_time <= test->resistance_interval_offset+2)
+		{
+			if(test->resistance_state == 0 && test->cur_meas.cccv == MODE_CC && (test->cur_mode == MODE_CHARGE || test->cur_mode == MODE_DISCHARGE))
+			{
+				fprintf(test->verbose_log, "DBG: resistance cycle -> 1\n");
+
+				if(test->cur_mode == MODE_CHARGE)
+					test_set_current(test, test->charge.current * test->resistance_first_pulse_current_mul);
+				else if(test->cur_mode == MODE_DISCHARGE)
+					test_set_current(test, -1 * test->discharge.current * test->resistance_first_pulse_current_mul);
+
+				test->resistance_state = 1;
+				test->resistance_last_v = test->cur_meas.voltage;
+			}
+		}
+
+		if(res_cycle_time >= test->resistance_interval_offset + test->resistance_first_pulse_len)
+		{
+			if(test->resistance_state == 1)
+			{
+				fprintf(test->verbose_log, "DBG: resistance cycle -> 2\n");
+
+				if(test->cur_mode == MODE_CHARGE)
+					test_set_current(test, test->charge.current * test->resistance_second_pulse_current_mul);
+				else if(test->cur_mode == MODE_DISCHARGE)
+					test_set_current(test, -1 * test->discharge.current * test->resistance_second_pulse_current_mul);
+
+				test->resistance_state = 2;
+			}
+
+		}
+
+		if(res_cycle_time >= test->resistance_interval_offset + test->resistance_first_pulse_len + test->resistance_second_pulse_len)
+		{
+			if(test->resistance_state != 0)
+			{
+				fprintf(test->verbose_log, "DBG: resistance cycle -> 0\n");
+
+				if(test->cur_mode == MODE_CHARGE)
+				{
+					fprintf(test->verbose_log, "DBG: V now: %f, last V: %f, dI: %f\n", test->cur_meas.voltage, test->resistance_last_v,
+						(test->charge.current * (test->resistance_base_current_mul - test->resistance_second_pulse_current_mul)));
+					test->cur_meas.resistance = (test->resistance_last_v - test->cur_meas.voltage) /
+						(test->charge.current * (test->resistance_base_current_mul - test->resistance_second_pulse_current_mul));
+
+					test_set_current(test, test->charge.current * test->resistance_base_current_mul);
+
+				}
+				else if(test->cur_mode == MODE_DISCHARGE)
+				{
+					fprintf(test->verbose_log, "DBG: V now: %f, last V: %f, dI: %f\n", test->cur_meas.voltage, test->resistance_last_v,
+						(test->discharge.current * (test->resistance_base_current_mul - test->resistance_second_pulse_current_mul)));
+
+					test->cur_meas.resistance = (test->cur_meas.voltage - test->resistance_last_v) /
+						(test->discharge.current * (test->resistance_base_current_mul - test->resistance_second_pulse_current_mul));
+
+					test_set_current(test, -1 * test->discharge.current * test->resistance_base_current_mul);
+				}
+				test->resistance_state = 0;
+				test->kludgimus_maximus = 2;
+			}
+		}
+
+		if(test->resistance_state && test->cur_meas.cccv != MODE_CC)
+		{
+			fprintf(test->verbose_log, "DBG: Test in CV - aborting resistance measurement.\n");
+			if(test->cur_mode == MODE_CHARGE)
+				test_set_current(test, test->charge.current * test->resistance_base_current_mul);
+			else if(test->cur_mode == MODE_DISCHARGE)
+				test_set_current(test, -1 * test->discharge.current * test->resistance_base_current_mul);
+			test->resistance_state = 0;
+		}
+	}
+
 	printf("test=%s cycle=%u ", test->name, test->cycle_cnt);
 	print_measurement(&test->cur_meas, cur_time - test->cur_meas.start_time);
+	printf("\n");
 	log_measurement(&test->cur_meas, test, cur_time - test->cur_meas.start_time);
 
 	clear_hw_measurements(test);
+	test->cur_meas.resistance = 0.0;
 
 	if(test->cur_mode == MODE_OFF && test->next_mode == MODE_DISCHARGE)
 	{
