@@ -1,0 +1,196 @@
+KAKKOR BATTERY TESTING SYSTEM
+
+
+Kakkor is a non-dissipative (i.e., energy reusing, bidirectional) battery testing (cycling) system.
+
+Kakkor is:
+- Modular (large number of channels enable concurrent individual tests; or channels can be paralleled for higher-current tests)
+- Designed for relatively high currents for large or power cells (26A per channel)
+- Efficient (94% typical, or 88% typical round-trip)
+- Low cost, with some limitations in accuracy (which can be greatly improved using software calibration (To Be Done))
+
+HW specs:
+- "Input" (stationary side) 9...13.8V
+- "Output" (cell side) 0...4.5V
+- Max test current 26A per channel
+- HW supports Constant Current and Constant Voltage charging and discharging (software could support Constant Power and Constant Resistance; To Be Done)
+- Temperature measurement with NTC
+- Sense wires for four-wire voltage measurement, with automatic bypass for 2-wire connection
+
+SW specs:
+- Continuous cycling
+- Half-cycle (charge/discharge) stopping conditions: Voltage Reach (CC only), Current Drop (CC-CV)
+- Test stopping conditions: Overtemperature, (To Be Done: cycle number)
+- Logging every second: voltage, current, power, charge, energy, temperature
+- Periodic dynamic DC resistance measurement during charge and/or discharge (recommended: 7 second test every 120 seconds)
+- Log format: CSV, easy to import in any spreadsheet program
+- Extra verbose logging for troubleshooting/debug
+- Test can be stopped and restarted, keeping the cycle number and appending to the log file
+- Simple command-line interface
+- Simple test configuration file format
+
+
+
+A complete system consists of:
+1 A control PC (software can be compiled on any operating system.) Any post-2000 PC will be powerful enough.
+2 "TTL" (5V) serial cable, typically a USB Serial cable _without_ RS232 level conversion
+3 Stationary battery pack - preferably 3s li-ion, but 12V deep discharge lead acid is acceptable
+4 Charger for stationary pack (recommended: charge controller)
+5 Any number of Kakkor boards
+6 Casing for the boards with adequate cooling
+7 Power supplies for the boards (-8 to -15V and +11 to +15V), +/-12V typically easiest, 0.25A per board.
+8 Cabling
+9 Test cables for the cells under test
+
+
+1) Control PC
+
+Any modern 2000's PC will do. RS232 serial ports can be used, but you will need a 5V (or 3V3) level converter.
+Any operating system with a C compiler will work. The control software is provided as open-source.
+
+2) Serial cable
+
+A $1 Chinese Ebay USB serial will work. Look for "TTL"; the cheap type with 4 wires coming out, 
+with NO RS232 level conversion chip integrated. Alternatively, a standard RS232 serial port or
+a standard USB-RS232 converter can be used, but you need to provide level conversion to 5V or 3V3, for example,
+using the MAX232 chip.
+
+3) Stationary battery pack
+
+Kakkor saves energy and eases thermal design by moving energy back and forth between the stationary pack and 
+the cells under test. It is recommended that the energy capacity of the stationary pack is at least 20x larger
+than the largest cell you are going to test. The more, the better.
+
+Because of the very nature of the test system, the pack is best kept near half full; this way, there is leeway
+in both directions in case that large number of either full or empty test cells are connected.
+
+For this reason, lithium ion is the most suitable technology for the battery pack, benefitting from the average
+50% SoC. Lead acid will have short lifetime as you never can float the battery at full SoC, although, some
+types of deep discharge LA batteries may be usable.
+
+Voltage must not go outside the 9V to 13.8V range.
+
+Typical options include:
+
+6s (12V) lead acid (not recommended for long term operation)
++ Easy, off-the-shelf solution
+- Expensive in the long run due to sulfation
+
+3s LiFePO4
++ May be easily available as large blocks
+- Quality problems due to niche manufacturers
+- Flat voltage curve, more difficult to control the desired average 50% SoC point
+
+3s LCO, NCA, NCM, etc. typical li-ion (recommended!)
+- Typically requires construction from small cells
++ Voltage curve indicative of SoC; charger can be set to 3.65V per cell.
+
+4) Charger for stationary pack
+Typical full round-trip efficiency for a typical test can be calculated as:
+- Stationary pack 98%
+- Kakkor during charge or discharge 94%
+- Cell to be tested 96% (depends heavily on cell type and (dis)charge current)
+- Test cables 99%
+Combined, half cycle: 87%
+Combined, full cycle: 76%
+
+For the worst case, it should be assumed that the complete system runs at 80% efficiency all the time.
+Hence, for worst realistic use case (100W average per channel), you'll need 20W of charger power
+per channel. You may diverge from this if you do the calculation; for example, in a typical
+installation with 9 channels running 24/7, a 50W power supply was sufficient, but only barely so,
+and with channels averaging less than 10A due to slower charging compared to discharging.
+
+A controller which monitors the pack voltage is really recommended, but is yet To Be Done. In the mean
+time, it is recommended that you use large enough stationary pack and do occasional manual measurements
+(once every day, for example) to make sure that the pack keeps near 50% SoC, adjusting charger voltage
+if necessary. Current Kakkor circuit boards and on-chip software do not provide Over-Voltage Protection (To Be Done).
+
+When using LCO, NCA, NCM type of cells, set the charger CV voltage to average 50% SoC voltage 
+(recommended: 10.9 to 11.0V for a 3s pack). Use charger that is powerful enough, and the pack will never
+drift too far from 50% SoC. Take occasional measurements to verify this; this will be easy based on voltage.
+When the pack is large enough, voltage sag or rise caused by large currents and DC resistance will be low.
+
+
+Example design:
+
+4 PCBs (12 modules)
+Maximum peak power: 1300W
+Maximum average power: 1200W
+Typical average power (nonsymmetric charge/discharge currents): <900W
+Charger for typical case: at least 180W (11V 17A)
+Charger for the worst case: at least 240W (11V 22A)
+Largest cell to be tested: 30 Wh -> minimum recommended stationary pack 600 Wh
+
+Stationary pack: Samsung INR18650-29E 3s31p = 88Ah 960 Wh
+100% SoC: 12.60V
+50% SoC: 10.95V
+0% SoC: 9.8V
+Maximum power (1C rating): 960W
+
+Note: Full test power goes through the stationary pack only when all tests are at the same mode at the same time.
+
+Note: In this example, the stationary pack will be occasionally charged at a rate near to its limit (1C charge).
+For more test channels, a larger pack will be needed. 1 kWh pack is absolute minimum for 12 test channels, and
+2 kWh is recommended to keep charge/discharge rates below 0.5C even in peak conditions.
+
+Note: When some channels are charging and some discharging, only the net sum goes through the stationary pack. This
+is usually the case, especially with a large number of individual concurrent tests, but sometimes it may happen
+that the tests (randomly) sync for some time (all discharging/charging at the same time), even hours in very rare cases.
+
+
+
+CONNECTING A CELL
+
+Note: If the wire current would be >16A, it's recommended to use the two parallel connectors.
+
+Note: In almost all cases, it's highly recommended to use separate Sense wires.
+
+Note: When using multiple paralleled channel, one of the channels (of your choice) will be a master channel; connect
+the sense wires and the temperature sensor to this channel only. Connecting sense wires to other channels is optional
+and normally unnecessary, although it may be needed in case your cables are too thin with too much voltage drop
+(software safety mechanisms do not allow too much voltage difference between the main leads and sense wires)
+
+
+Construction of the cell test cables:
+
+(Pouch cells with tabs:) 1) Use a perforator to punch a hole (5.5mm for office perforator) in the tab. For currents 
+exceeding 50A, two holes recommended.
+
+(Cylindrical cells:) 1) Weld connection tabs to the cells. Proceed as with pouch cells.
+
+(Cells with threaded terminals:) 1) Do nothing.
+
+2) Crimp terminal lugs to test wires. For cell currents >20A, use two lugs, one at each side of the tab (not applicable on
+threaded terminals). For cell currents >50A, use two holes, two lugs each, four lugs total.
+
+If you use multiple test channels in parallel, crimp multiple wires in the lugs, going to each channel.
+
+For currents < 16A, use at least 1.5mm^2 wire.
+For currents > 16A, use at least 2.5mm^2 wire.
+Keep the wires as short as possible (< 50 cm). If long wires (50-100 cm) are needed, double the cross-sectional area.
+
+3) Crimp terminal lugs to sense wires.
+
+4) Install wires to the cells: With cell tabs, use both sides of the tab. Fasten properly. See Figure.
+
+5) Connect other ends to the channels.
+
+WARNING! Kakkor utilizes TWO parallel connectors for both negative and positive terminals. These connectors
+are paralleled on the PCB. Be careful not to accidentally connect Cell- and Cell+ to these parallel connectors;
+it would accidentally short circuit the cell.
+
+When connecting with sense wires (recommended): Connect both sense wires FIRST. This precharges the output capacitors. Then
+connect main wires.
+
+When connecting without sense wires (for example, when paralleling multiple channels, and some channels do not use
+sense wires): Connect the main negative wire(s) first. Then touch the main positive wire to SENSE+ connector for at 
+least half a second, then quickly (within 2 seconds) connect it to main positive connector. 
+This precharges the output capacitors, to avoid sparking.
+
+6) Install and connect temperature sensor. (optional)
+
+Install the NTC to the cell using high-quality thermal paste. Tape the sensor using strong tape. Tape thermal insulation
+on the top of the sensor.
+
+Connect the NTC wires (no polarity) to the channel.
+
