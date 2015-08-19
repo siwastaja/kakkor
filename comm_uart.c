@@ -88,45 +88,39 @@ int comm_send(int device_fd, char* buf)
 	return len;
 }
 
-/*
-int aread(int fd, char* buf, int n)
-{
-	static int jutska = 0;
-	switch(jutska)
-	{
-		case 0:
-		strcpy(buf, "kakkenpis sen vir\ntsen:629"); break;
-		case 1:
-		strcpy(buf, "johannes;@1:VMEAS=123 IMEAS=45"); break;
-		case 2:
-		strcpy(buf, "6 TMEAS=789"); break;
-		case 3:
-		strcpy(buf, ";asfgdashjughaeghu;gta"); break;
-		case 4:
-		strcpy(buf, "safsa;@MUOVIKUKKA;;@kakkapissa"); break;
-		case 5:
-		strcpy(buf, ";;@kakka;;"); break;
-		case 6:
-		strcpy(buf, "@viela yksi"); break;
-		case 7:
-		strcpy(buf, ";"); break;
-		default:
-		buf[0] = 0;
-		break;
-	}
-
-	printf("aread will return: %s\n", buf);
-	jutska++;
-	return strlen(buf);
-}
-*/
-
-
 #define COMM_SEPARATOR ';'
 #define MAX_READBUF_LEN 500
 
 #define REPLY_WAIT_TIMEOUT_MS 100
 #define REPLY_INTERREAD_TIMEOUT_MS 20
+
+void go_fatal(int fd, char* message)
+{
+	char tmpbuf[100];
+	int ch, tries;
+	printf("\n\n\n\nFATAL ERROR: %s\n", message);
+	printf("Shutting down channels 0 to 64\n");
+
+	for(ch = 0; ch < 65; ch++)
+	{
+		sprintf(tmpbuf, ";@%u: OFF;", ch);
+		comm_send(fd, tmpbuf);
+		usleep(20000);
+	}
+
+	for(tries = 0; tries < 10; tries++)
+	{
+		for(ch = 0; ch < 65; ch++)
+		{
+			sprintf(tmpbuf, ";@%u: SHDN;", ch);
+			comm_send(fd, tmpbuf);
+			usleep(20000);
+		}
+		sleep(3);
+	}
+
+	exit(1);
+}
 
 int read_reply(int fd, char* outbuf, int maxbytes)
 {
@@ -197,6 +191,12 @@ int comm_expect(int fd, char* buf)
 	{
 		return ret;
 	}
+
+	if(strncmp(readbuf, "FATAL", 1000) == 0)
+	{
+		go_fatal(fd, readbuf);
+	}
+
 	if(strncmp(readbuf, buf, 1000) == 0)
 		return 0;
 	else

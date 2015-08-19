@@ -64,7 +64,7 @@ typedef struct
 
 typedef struct
 {
-	int num_hw_measurements;
+	int num_hw_measurements; // Channels
 	hw_measurement_t hw_meas[MAX_PARALLEL_CHANNELS];
 	double voltage;
 	double current;
