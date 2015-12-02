@@ -1127,9 +1127,17 @@ void update_test(test_t* test, int cur_time)
 	{
 //		printf("Warning: kludge in use. todo: fix HW not to give false CV information (set_current() -> also set i_override\n");
 	}
-	measure_hw(test, test->kludgimus_maximus);
+	if(measure_hw(test, test->kludgimus_maximus) < 0)
+	{
+		go_fatal(test->fd, "measure_hw failed");
+	}
+
 	if(test->kludgimus_maximus) test->kludgimus_maximus--;
-	update_measurement(test, 1);
+	if(update_measurement(test, 1) < 0)
+	{
+		go_fatal(test->fd, "update_measurement failed");
+	}
+
 
 	if(test->cur_meas.temperature < test->temperature_stop && (test->cur_mode != MODE_OFF || test->next_mode != MODE_OFF))
 	{
@@ -1137,7 +1145,7 @@ void update_test(test_t* test, int cur_time)
 		fprintf(test->verbose_log, "Info: Test %s overtemperature, stopping test.\n", test->name);
 		if(set_test_mode(test, MODE_OFF))
 		{
-			printf("Emergency: cannot set test mode.\n");
+			go_fatal(test->fd, "set_test_mode failed");
 		}
 		test->next_mode = MODE_OFF;
 	}
@@ -1259,7 +1267,10 @@ void update_test(test_t* test, int cur_time)
 			test->cur_meas.cumul_ah = 0.0;
 			test->cur_meas.cumul_wh = 0.0;
 
-			start_discharge(test);
+			if(start_discharge(test) < 0)
+			{
+				go_fatal(test->fd, "start_discharge failed");
+			}
 			sleep(1);
 		}
 	}
@@ -1273,7 +1284,10 @@ void update_test(test_t* test, int cur_time)
 			test->cur_meas.cumul_ah = 0.0;
 			test->cur_meas.cumul_wh = 0.0;
 
-			start_charge(test);
+			if(start_charge(test) < 0)
+			{
+				go_fatal(test->fd, "start_charge failed");
+			}
 			sleep(1);
 		}
 	}

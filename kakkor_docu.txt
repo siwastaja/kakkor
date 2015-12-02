@@ -194,3 +194,50 @@ on the top of the sensor.
 
 Connect the NTC wires (no polarity) to the channel.
 
+
+
+
+
+CONFIGURATION FILES
+
+Each test needs a configuration file which specifies test currents, voltages, etc.
+
+When a test is started, a file named "defaults" is parsed first. Then, the actual test file overrides any
+settings. This results in concise test files with minimum number of settings written down explicitly.
+
+Test file consists of:
+
+1) Control keywords
+general -- can be omitted in the beginning of file -- defines settings that affect both charge and discharge
+charge -- defines charge-related parameters
+discharge -- defines discharge-related parameters
+
+2) key=value pairs
+
+Any whitespace separates control keywords and key=value pairs; hence, key=value pair must be written without
+spaces.
+
+An example configuration file
+
+channels=1,2
+masterchannel=1
+
+charge current=5.0 voltage=4.2 stopcurrent=0.5
+
+discharge current=10.0 stopvoltage=2.8
+
+
+List of keys:
+
+channels=x,y,z
+Comma-separated list of electrically paralleled channels used for the same cell
+
+masterchannel=n
+Channel ID that has sense wires and temperature sensor connected in case of multiple parallel channels. Not needed
+for single-channel test
+
+
+
+Type of stop condition is automatically deduced from the given parameters; if you give "voltage" and "stopcurrent",
+CC-CV is used and cycle terminated when the stopcurrent is reached. If you only give "stopvoltage", cycle is terminated
+when the voltage is reached (CC only).
