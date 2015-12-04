@@ -121,6 +121,7 @@ typedef struct
 	int resistance_state;
 	double resistance_last_v;
 	int kludgimus_maximus;
+	int resistance_every_cycle;
 } test_t;
 
 int log_read_cycle_num(char* filename)
@@ -412,9 +413,10 @@ void print_params(test_t* params)
 
 	fprintf(params->verbose_log, "temperature_stop=%f\n", params->temperature_stop);
 
-	fprintf(params->verbose_log, "resistance_on=%d, interval=%d, interval_offset=%d first_pulse=%d, second_pulse=%d, base_curr=%f, first_curr=%f, second_curr=%f\n",
+	fprintf(params->verbose_log, "resistance_on=%d, interval=%d, interval_offset=%d first_pulse=%d, second_pulse=%d, base_curr=%f, first_curr=%f, second_curr=%f, resistance_every_cycle=%d\n",
 		params->resistance_on, params->resistance_interval, params->resistance_interval_offset, params->resistance_first_pulse_len, params->resistance_second_pulse_len, 
- 		params->resistance_base_current_mul, params->resistance_first_pulse_current_mul, params->resistance_second_pulse_current_mul);
+ 		params->resistance_base_current_mul, params->resistance_first_pulse_current_mul, params->resistance_second_pulse_current_mul,
+		params->resistance_every_cycle);
 
 	fflush(params->log);
 	fflush(params->verbose_log);
@@ -675,7 +677,7 @@ int configure_hw(test_t* params, mode_t mode)
 
 int translate_settings(test_t* params)
 {
-	params->hw_charge.current = (int)( ((params->resistance_on)?(params->resistance_base_current_mul):(1.0)) * params->charge.current*1000.0/params->num_channels);
+	params->hw_charge.current = (int)( ((params->resistance_on && (params->cycle_cnt % params->resistance_every_cycle)==0)?(params->resistance_base_current_mul):(1.0)) * params->charge.current*1000.0/params->num_channels);
 	if(params->charge.stop_mode == STOP_MODE_CURRENT)
 	{
 		params->hw_charge.stop_current = (int)(params->charge.stop_current*1000.0/params->num_channels);
@@ -697,7 +699,7 @@ int translate_settings(test_t* params)
 		return 1;
 	}
 
-	params->hw_discharge.current = -1*((int)( ((params->resistance_on)?(params->resistance_base_current_mul):(1.0)) * params->discharge.current*1000.0/params->num_channels));
+	params->hw_discharge.current = -1*((int)( ((params->resistance_on && (params->cycle_cnt % params->resistance_every_cycle)==0)?(params->resistance_base_current_mul):(1.0)) * params->discharge.current*1000.0/params->num_channels));
 	if(params->discharge.stop_mode == STOP_MODE_CURRENT)
 	{
 		params->hw_discharge.stop_current = -1*((int)(params->discharge.stop_current*1000.0/params->num_channels));
@@ -823,6 +825,12 @@ int check_params(test_t* params)
 		if(params->resistance_base_current_mul < 1.0 || params->resistance_base_current_mul > 1.2)
 		{
 			printf("ERROR: Inferred resistance_base_current_mul out of range (%f)\n", params->resistance_base_current_mul);
+			return -1;
+		}
+
+		if(params->resistance_every_cycle < 1 || params->resistance_every_cycle > 100)
+		{
+			printf("ERROR: Illegal resistance_every_cycle (%u)\n", params->resistance_every_cycle);
 			return -1;
 		}
 
@@ -1057,6 +1065,15 @@ int parse_token(char* token, test_t* params)
 			params->resistance_first_pulse_current_mul = ftmp * 0.85;
 		}
 	}
+	else if(sscanf(token, "resistancecycle=%u", &itmp) == 1)
+	{
+		if(itmp < 1 || itmp > 1000)
+		{
+			printf("Warning: ignoring out-of-range resistancecycle (%u) - using 1\n", itmp);
+			itmp = 1;
+		}
+		params->resistance_every_cycle = itmp;
+	}
 	else
 	{
 		printf("Warning: ignoring unrecognized token %s\n", token);
@@ -1168,7 +1185,7 @@ void update_test(test_t* test, int cur_time)
 	}
 
 
-	if(test->resistance_on)
+	if(test->resistance_on && (test->cycle_cnt % test->resistance_every_cycle) == 0)
 	{
 		int tim = cur_time - test->cur_meas.start_time;
 		int res_cycle_time = tim % test->resistance_interval;

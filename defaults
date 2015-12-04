@@ -1,8 +1,9 @@
 device=/dev/ttyUSB0
 startmode=charge
 startcycle=0
-temperaturestop<11200
+temperaturestop<11100
 resistance=on
 resistanceinterval=120s
 resistancepulse=7s
 resistancecurrent=0.70
+resistancecycle=2

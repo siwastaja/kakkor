@@ -1,0 +1,17 @@
+TESTING:
+
+1) Create a test file, copy from existing template
+
+2) Edit the test file
+
+3) Connect test wires:
+   - Be careful, don't flex the PCB's or short anything!
+   - Sense wires are connected to only one channel, which is configured as "masterchannel"
+
+4) Run test(s):
+   ./kakkor testfile1 testfile2 testfile3
+
+5) Stop with CTRL+C, then run 
+   ./stop.sh
+   Make sure all leds are off.
+

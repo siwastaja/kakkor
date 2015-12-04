@@ -1,0 +1,28 @@
+STARTUP
+
+1) Plug in CHARGER (laturi). Fan starts.
+
+2) Measure voltage at STORAGE PACK terminals. Should be between 9.75 .. 9.85 V. Adjust charger trimpot to 9.80V.
+
+3) Connect the MAIN POWER copper bridge. Fasten both bolts properly.
+
+4) Plug in CYCLER LOGIC. Leds blink.
+
+5) Start testing
+
+
+SHUTDOWN
+
+1) Run
+   ./shdn.sh
+   All leds blink in sequence.
+
+2) Unplug CYCLER LOGIC
+
+3) Highly recommended: Unplug test cells. Removing either plus or minus sides is enough. Also remove sense wires.
+
+4) Loosen one of the MAIN POWER copper bridge screws a bit. Remove another completely. Turn the copper bridge away.
+
+5) Unplug CHARGER. Fan stops.
+
+

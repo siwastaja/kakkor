@@ -22,6 +22,7 @@ int comm_autoretry(int fd, char* sendbuf, char* expect, char* rxbuf);
 int comm_send(int fd, char* buf);
 void uart_flush(int fd);
 
+void go_fatal(int fd, char* message);
 
 
 
