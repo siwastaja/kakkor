@@ -33,7 +33,7 @@ SW specs:
 
 A complete system consists of:
 1 A control PC (software can be compiled on any operating system.) Any post-2000 PC will be powerful enough.
-2 "TTL" (5V) serial cable, typically a USB Serial cable _without_ RS232 level conversion
+2 "TTL" (5V or 3.3V) serial cable, typically a USB Serial cable _without_ RS232 level conversion
 3 Stationary battery pack - preferably 3s li-ion, but 12V deep discharge lead acid is acceptable
 4 Charger for stationary pack (recommended: charge controller)
 5 Any number of Kakkor boards
@@ -229,15 +229,121 @@ discharge current=10.0 stopvoltage=2.8
 
 List of keys:
 
-channels=x,y,z
-Comma-separated list of electrically paralleled channels used for the same cell
+General settings:
 
-masterchannel=n
-Channel ID that has sense wires and temperature sensor connected in case of multiple parallel channels. Not needed
-for single-channel test
+device=
+	Handle to serial device. 
+	Examples: 
+		Unix: device=/dev/ttyUSB0
+		Windows: device=COM15
+
+channels=
+	Comma-separated list of electrically paralleled channels used for the same cell
+	Example: channels=2,3,5
+
+masterchannel=
+	Channel ID that has sense wires and temperature sensor connected in case of multiple parallel channels. Not needed
+	for single-channel test
+	Example: masterchannel=5
+
+startmode=<charge|discharge>
+	You can choose which halfcycle comes first when you start the program.
+	Examples:
+		startmode=charge
+		startmode=discharge
+
+resistance=<on|off>
+	Enable DC Resistance measurement for the test.
+	Example:
+		resistance=on
+
+resistanceinterval=<time>
+	Interval between DC resistance measurements. Keep this considerably longer than "resistancepulse" to avoid max current increasing too much.
+	Example:
+		resistanceinterval=120s
+
+resistancepulse=<time>
+	Pulse length for resistance measurement. 7 seconds recommended as minimum. Slightly longer gives more repeatable results.
+	Example:
+		resistancepulse=7s
+
+resistancecurrent=
+	Current multiplier during resistance measurement pulse. Between 0.5 and 0.8 recommended.
+	Low multiplier -> low current during pulses -> higher current outside the pulses, to keep the average current correct.
+	Example:
+		resistancecurrent=0.7
+
+resistancecycle=
+	DC resistance measurement is only enabled on every n. cycle
+	Examples:
+		Measure at every cycle:
+			resistancecycle=1
+		Measure at every 10th cycle:
+			resistancecycle=10
 
 
 
-Type of stop condition is automatically deduced from the given parameters; if you give "voltage" and "stopcurrent",
-CC-CV is used and cycle terminated when the stopcurrent is reached. If you only give "stopvoltage", cycle is terminated
-when the voltage is reached (CC only).
+Settings after charge or discharge keyword:
+
+current=
+	Set current which is followed during CC mode. In amperes.
+	Example:
+		current=12.5
+
+voltage=
+	Set voltage which is followed during CV mode. In volts.
+	Example:
+		voltage=4.2
+
+
+stopcurrent=
+	Set current which stops the halfcycle during CV mode. In amperes.
+	Example:
+		charge current=10 voltage=4.2 stopcurrent=1.0
+		* Charges at 10 amps (CC). Starts tapering current down to keep voltage at 4.2V (CV). Stops when current has tapered to 1.0A.
+
+stopvoltage=
+	Set voltage that, when reached, stops the halfcycle immediately. In volts.
+	Example:
+		discharge current=10 stopvoltage=3.0
+		* Discharges at 10 amps (CC). Stops discharging when 3.0V is reached, no CV phase, no current tapering down.
+
+cooldown=<time>
+	Set the rest time after the halfcycle.
+	Example:
+		discharge current=10 stopvoltage=3.0 cooldown=30s
+		* Cools down with no current flowing for 30s after the stopvoltage is reached and halfcycle stopped.
+
+power=
+	Enable constant power mode. Use this instead of "current" keyword. You can only use "stopvoltage" with this, CV phase is not supported.
+	Maximum current is automatically calculated from stopvoltage before test is allowed to start so that the current doesn't rise above specs.
+	DO NOT USE YET. Coming soon...
+	Example:
+		discharge power=100 stopvoltage=3.0
+
+
+
+
+
+USING THE PROGRAM
+
+At this point, there is no proper UI. You start the tests by running:
+
+	./kakkor testfile1 testfile2 testfile3 etc...
+
+You stop the test with CTRL+C, after which you need to run ./stop.sh which issues OFF command to all modules. Make sure this 
+script is up to date with all module IDs in your system.
+
+The program generates two log files (assuming test file named "testfile"):
+
+	testfile.log
+	testfile_verbose.log
+
+testfile.log is in csv format and can be opened in Excel. _verbose file includes extra debug information.
+
+If you run the software again with the same testfile, so that the log files already exist, the software appends at the end of
+the files. First it looks at the logs to obtain the last cycle number, so that cycle numbering continues from where it left.
+
+
+Better UI may be coming some time. It would show the individual tests within their own windows and allow any test to be stopped,
+paused, and a test to be added or removed during runtime.

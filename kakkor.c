@@ -38,6 +38,9 @@ typedef struct
 {
 	double current;
 	double voltage;
+	int const_power_mode;
+	double power;
+
 	stop_mode_t stop_mode;
 	double stop_current;
 	double stop_voltage;
@@ -725,21 +728,30 @@ int translate_settings(test_t* params)
 
 }
 
-#define MIN_CURRENT 0.0
+#define MIN_CURRENT 0.2
 #define MAX_CURRENT 1000.0
 
 int check_base_settings(char* name, base_settings_t* params)
 {
-	if(params->current == 0.0)
+	if(params->current == 0.0 && !params->const_power_mode)
 	{
 		printf("ERROR: %s: Current missing\n", name);
 		return 1;
 	}
 
-	if(params->current < MIN_CURRENT || params->current > MAX_CURRENT)
+	if(params->const_power_mode)
 	{
-		printf("ERROR: %s: Illegal current: %.3f\n", name, params->current);
-		return 1;
+		// todo: all kinds of stuff.
+		params->const_power_mode = 0;
+		printf("NOTE: Constant power mode not implemented yet.\n");
+	}
+	else
+	{
+		if(params->current < MIN_CURRENT || params->current > MAX_CURRENT)
+		{
+			printf("ERROR: %s: Illegal current: %.3f\n", name, params->current);
+			return 1;
+		}
 	}
 
 	if(params->voltage == 0.0)
@@ -964,6 +976,24 @@ int parse_token(char* token, test_t* params)
 		else
 		{
 			printf("voltage token without charge/discharge keyword before.\n");
+			return 1;
+		}
+	}
+	else if(sscanf(token, "power=%lf", &ftmp) == 1)
+	{
+		if(param_state == MODE_CHARGE)
+		{
+			params->charge.power = ftmp;
+			params->charge.const_power_mode = 1;
+		}
+		else if(param_state == MODE_DISCHARGE)
+		{
+			params->discharge.power = ftmp;
+			params->discharge.const_power_mode = 1;
+		}
+		else
+		{
+			printf("power token without charge/discharge keyword before.\n");
 			return 1;
 		}
 	}
