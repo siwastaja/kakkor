@@ -103,7 +103,7 @@ void go_fatal(int fd, char* message)
 
 	for(ch = 0; ch < 65; ch++)
 	{
-		sprintf(tmpbuf, ";@%u: OFF;", ch);
+		sprintf(tmpbuf, "@%u:OFF;", ch);
 		comm_send(fd, tmpbuf);
 		usleep(20000);
 	}
@@ -112,9 +112,9 @@ void go_fatal(int fd, char* message)
 	{
 		for(ch = 0; ch < 65; ch++)
 		{
-			sprintf(tmpbuf, ";@%u: SHDN;", ch);
+			sprintf(tmpbuf, "@%u:SHDN;", ch);
 			comm_send(fd, tmpbuf);
-			usleep(20000);
+			usleep(50000);
 		}
 		sleep(3);
 	}

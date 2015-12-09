@@ -81,6 +81,9 @@ typedef struct
 
 } measurement_t;
 
+
+#define MAX_T_CAL_POINTS 20
+
 typedef struct
 {
 	char* name;
@@ -114,6 +117,7 @@ typedef struct
 	FILE* verbose_log;
 
 	int resistance_on;
+	int resistance_on_discharge_too;
 	int resistance_interval;
 	int resistance_interval_offset;
 	int resistance_first_pulse_len;
@@ -125,7 +129,39 @@ typedef struct
 	double resistance_last_v;
 	int kludgimus_maximus;
 	int resistance_every_cycle;
+
 } test_t;
+
+
+int num_t_cal_points;
+double t_cal[MAX_T_CAL_POINTS][2];
+
+double ntc_to_c(double ntc)
+{
+	int i;
+
+	if(num_t_cal_points > MAX_T_CAL_POINTS || num_t_cal_points < 2) return -9999.0;
+
+	// to do: extrapolate:
+	if(ntc > t_cal[0][0])
+		return -999.0;
+
+	if(ntc < t_cal[num_t_cal_points-1][0])
+		return 999.0;
+
+
+	// interpolate:
+	for(i = 1; i < num_t_cal_points; i++)
+	{
+		if(ntc <= t_cal[i-1][0] && ntc >= t_cal[i][0])
+		{
+			double loc = (t_cal[i-1][0] - ntc) / (t_cal[i-1][0] - t_cal[i][0]);
+			return (1.0-loc) * t_cal[i-1][1] + loc * t_cal[i][1];
+		}
+	}
+
+	return -9999.0;
+}
 
 int log_read_cycle_num(char* filename)
 {
@@ -231,14 +267,14 @@ void print_measurement(measurement_t* m, int time)
 
 #define HW_MIN_VOLTAGE 0
 #define HW_MAX_VOLTAGE 7000
-#define HW_MIN_CURRENT -27000
-#define HW_MAX_CURRENT 27000
+#define HW_MIN_CURRENT -26000
+#define HW_MAX_CURRENT 26000
 #define HW_MIN_TEMPERATURE 0
 #define HW_MAX_TEMPERATURE 65535
 
 int set_channel_mode(test_t* test, int channel, mode_t mode)
 {
-	usleep(10000);
+	usleep(5000);
 	if(mode != MODE_OFF && mode != MODE_CHARGE && mode != MODE_DISCHARGE)
 	{
 		printf("Error: invalid mode requested (%d)!\n", mode);
@@ -270,7 +306,7 @@ int set_test_mode(test_t* test, mode_t mode)
 	int fail = 0;
 	for(i = 0; i < test->num_channels; i++)
 	{
-		usleep(10000);
+		usleep(5000);
 //		printf("INFO: Setting channel %d to mode %d\n", test->channels[i], mode);
 		if(set_channel_mode(test, test->channels[i], mode))
 		{
@@ -430,7 +466,7 @@ int update_measurement(test_t* test, double elapsed_seconds)
 {
 //	printf("upd_meas: %u , %u\n", test->master_channel_idx, test->cur_meas.hw_meas[test->master_channel_idx].voltage);
 	test->cur_meas.voltage = test->cur_meas.hw_meas[test->master_channel_idx].voltage / 1000.0;
-	test->cur_meas.temperature = test->cur_meas.hw_meas[test->master_channel_idx].temperature;
+	test->cur_meas.temperature = ntc_to_c(test->cur_meas.hw_meas[test->master_channel_idx].temperature);
 
 	double current_sum = 0;
 	int num_channels_in_mode[4] = {0,0,0,0};
@@ -562,14 +598,12 @@ int measure_hw(test_t* test, int horrible_kludge)
 	return 0;
 }
 
-#define MAX_HW_CURRENT 25000
-#define MIN_HW_CURRENT -25000
-
 int hw_set_current(int fd, int channel, int current)
 {
 	char buf[32];
-	if(channel < 0 || channel > MAX_ID || current < MIN_HW_CURRENT || current > MAX_HW_CURRENT)
-		return -2;
+	if(channel < 0 || channel > MAX_ID || current < HW_MIN_CURRENT || current > HW_MAX_CURRENT)
+		go_fatal(fd, "illegal set current");
+//		return -2;
 	sprintf(buf, "@%u:SETI %d;", channel, current);
 	if(comm_autoretry(fd, buf, "SETI OK", NULL))
 		return -1;
@@ -639,7 +673,7 @@ int configure_hw(test_t* params, mode_t mode)
 		if(comm_autoretry(params->fd, buf, "OFF OK", NULL))
 			return -1;
 
-		usleep(20000);
+		usleep(5000);
 
 		sprintf(buf, "@%u:SETI %d;", params->channels[i], settings->current);
 		printf("      %s", buf); fflush(stdout);
@@ -647,7 +681,7 @@ int configure_hw(test_t* params, mode_t mode)
 		if(comm_autoretry(params->fd, buf, "SETI OK", NULL))
 			return -1;
 
-		usleep(20000);
+		usleep(5000);
 
 		sprintf(buf, "@%u:SETV %d;", params->channels[i], settings->voltage+extra_vcv);
 		printf("      %s", buf); fflush(stdout);
@@ -655,7 +689,7 @@ int configure_hw(test_t* params, mode_t mode)
 		if(comm_autoretry(params->fd, buf, "SETV OK", NULL))
 			return -1;
 
-		usleep(20000);
+		usleep(5000);
 
 		sprintf(buf, "@%u:SETISTOP %d;", params->channels[i], settings->stop_current);
 		printf("      %s", buf); fflush(stdout);
@@ -663,7 +697,7 @@ int configure_hw(test_t* params, mode_t mode)
 		if(comm_autoretry(params->fd, buf, "SETISTOP OK", NULL))
 			return -1;
 
-		usleep(20000);
+		usleep(5000);
 
 		sprintf(buf, "@%u:SETVSTOP %d;", params->channels[i], settings->stop_voltage+extra_vstop);
 		printf("      %s\n", buf);
@@ -671,7 +705,7 @@ int configure_hw(test_t* params, mode_t mode)
 		if(comm_autoretry(params->fd, buf, "SETVSTOP OK", NULL))
 			return -1;
 
-		usleep(20000);
+		usleep(5000);
 
 	}
 
@@ -739,21 +773,6 @@ int check_base_settings(char* name, base_settings_t* params)
 		return 1;
 	}
 
-	if(params->const_power_mode)
-	{
-		// todo: all kinds of stuff.
-		params->const_power_mode = 0;
-		printf("NOTE: Constant power mode not implemented yet.\n");
-	}
-	else
-	{
-		if(params->current < MIN_CURRENT || params->current > MAX_CURRENT)
-		{
-			printf("ERROR: %s: Illegal current: %.3f\n", name, params->current);
-			return 1;
-		}
-	}
-
 	if(params->voltage == 0.0)
 	{
 		if(params->stop_voltage == 0.0)
@@ -798,6 +817,24 @@ int check_base_settings(char* name, base_settings_t* params)
 		printf("ERROR: %s: both voltage and stopvoltage defined\n", name);
 		return 1;
 	}
+
+	if(params->const_power_mode)
+	{
+		if(params->stop_mode != STOP_MODE_VOLTAGE)
+		{
+			printf("ERROR: %s: Constant power mode requires stopmode=voltage.\n", name);
+			return 1;
+		}
+
+	}
+
+
+	if(params->current < MIN_CURRENT || params->current > MAX_CURRENT)
+	{
+		printf("ERROR: %s: Illegal current: %.3f\n", name, params->current);
+		return 1;
+	}
+
 
 	return 0;
 }
@@ -849,11 +886,32 @@ int check_params(test_t* params)
 		printf("INFO: Resistance measurement on, inferring resistance_base_current_mul = %f\n", params->resistance_base_current_mul);
 	}
 
+	if(params->discharge.const_power_mode)
+	{
+		if(params->resistance_on_discharge_too)
+		{
+			printf("ERROR: Cannot use const power mode when \"resistance=on\". Use \"resistance=charge\".\n");
+			return -1;
+		}
+		double cur_per_ch = params->discharge.power / params->discharge.stop_voltage / params->num_channels;
+		printf("INFO: Constant power: maximum current per channel = %f at end voltage %f\n", cur_per_ch, params->discharge.stop_voltage);
+		if(cur_per_ch > ((double)(HW_MAX_CURRENT-200)/1000.0))
+		{
+			printf("ERROR: Constant power: maximum channel current is exceeded!\n");
+			return 1;
+		}
+
+		double start_cur = params->discharge.power / params->discharge.stop_voltage * 0.7;
+		printf("INFO: Constant power: inferring default (starting) current=%f", start_cur);
+		params->discharge.current = start_cur;
+
+	}
 
 	if(check_base_settings("Charge", &params->charge))
 		return -1;
 	if(check_base_settings("Discharge", &params->discharge))
 		return -1;
+
 
 	return 0;
 }
@@ -864,7 +922,7 @@ int parse_token(char* token, test_t* params)
 	static mode_t param_state = MODE_OFF;
 	int n;
 	int itmp;
-	double ftmp;
+	double ftmp, ftmp2;
 	char ctmp;
 	if(strstr(token, "charge") == token)
 	{
@@ -1021,9 +1079,9 @@ int parse_token(char* token, test_t* params)
 			return 1;
 		}
 	}
-	else if(sscanf(token, "temperaturestop<%lf", &ftmp) == 1)
+	else if(sscanf(token, "temperaturestop>%lf", &ftmp) == 1)
 	{
-		if(ftmp	< 1.0 || ftmp > 65535.0)
+		if(ftmp	< 10.0 || ftmp > 120.0)
 		{
 			printf("Warning: ignored illegal temperaturestop value.\n");
 		}
@@ -1050,11 +1108,19 @@ int parse_token(char* token, test_t* params)
 	else if(strstr(token, "resistance=on") == token)
 	{
 		params->resistance_on=1;
+		params->resistance_on_discharge_too=1;
 		return 0;
 	}
 	else if(strstr(token, "resistance=off") == token)
 	{
 		params->resistance_on=0;
+		params->resistance_on_discharge_too=0;
+		return 0;
+	}
+	else if(strstr(token, "resistance=charge") == token)
+	{
+		params->resistance_on=1;
+		params->resistance_on_discharge_too=0;
 		return 0;
 	}
 	else if((sscanf(token, "resistanceinterval=%d%c", &itmp, &ctmp) == 2) && (ctmp == 's' || ctmp == 'S' || ctmp == 'm' || ctmp == 'M'))
@@ -1103,6 +1169,26 @@ int parse_token(char* token, test_t* params)
 			itmp = 1;
 		}
 		params->resistance_every_cycle = itmp;
+	}
+	else if(sscanf(token, "ntc=%lf,%lf", &ftmp, &ftmp2) == 2)
+	{
+		if(ftmp < 10 || ftmp > 65530.0 || ftmp2 < -100.0 || ftmp2 > 200.0)
+		{
+			printf("Warning: ignoring out-of-range ntc calibration pair (%f,%f)\n", ftmp, ftmp2);
+		}
+		else
+		{
+			if(num_t_cal_points >= MAX_T_CAL_POINTS-1)
+			{
+				printf("Warning: ignoring excess NTC calibration pair (%f, %f), max %u points allowed\n", ftmp, ftmp2, MAX_T_CAL_POINTS);
+			}
+			else
+			{
+				t_cal[num_t_cal_points][0] = ftmp;
+				t_cal[num_t_cal_points][1] = ftmp2;
+				num_t_cal_points++;
+			}
+		}
 	}
 	else
 	{
@@ -1185,8 +1271,10 @@ void update_test(test_t* test, int cur_time)
 		go_fatal(test->fd, "update_measurement failed");
 	}
 
+//	if(cur_time == 7)
+//		go_fatal(test->fd, "go_fatal test");
 
-	if(test->cur_meas.temperature < test->temperature_stop && (test->cur_mode != MODE_OFF || test->next_mode != MODE_OFF))
+	if(test->cur_meas.temperature > test->temperature_stop && (test->cur_mode != MODE_OFF || test->next_mode != MODE_OFF))
 	{
 		printf("Info: Test %s overtemperature, stopping test.\n", test->name);
 		fprintf(test->verbose_log, "Info: Test %s overtemperature, stopping test.\n", test->name);
@@ -1215,7 +1303,9 @@ void update_test(test_t* test, int cur_time)
 	}
 
 
-	if(test->resistance_on && (test->cycle_cnt % test->resistance_every_cycle) == 0)
+	if(test->resistance_on &&
+	 (test->resistance_on_discharge_too || test->cur_mode==MODE_CHARGE)
+	 && (test->cycle_cnt % test->resistance_every_cycle) == 0)
 	{
 		int tim = cur_time - test->cur_meas.start_time;
 		int res_cycle_time = tim % test->resistance_interval;
@@ -1294,6 +1384,17 @@ void update_test(test_t* test, int cur_time)
 				test_set_current(test, -1 * test->discharge.current * test->resistance_base_current_mul);
 			test->resistance_state = 0;
 		}
+	}  // end if resistance measurement
+	else if(test->cur_mode == MODE_DISCHARGE && test->discharge.const_power_mode && cur_time%10 == 5)
+	{
+		double new_current = test->discharge.power / test->cur_meas.voltage;
+		if(new_current / test->num_channels > (HW_MAX_CURRENT-50)/1000.0)
+		{
+			go_fatal(test->fd, "constant power overcurrent");
+		}
+		printf("dbg: Const power: Setting test current to %.2f A * %.3f V = %.2f W\n", new_current, test->cur_meas.voltage, new_current*test->cur_meas.voltage);
+		test_set_current(test, -1 * new_current);
+
 	}
 
 	printf("test=%s cycle=%u ", test->name, test->cycle_cnt);
