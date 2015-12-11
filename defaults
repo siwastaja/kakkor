@@ -3,9 +3,9 @@ startmode=charge
 startcycle=0
 temperaturestop>72.0
 resistance=charge
-resistanceinterval=120s
+resistanceinterval=420s
 resistancepulse=8s
-resistancecurrent=0.70
+resistancecurrent=0.60
 resistancecycle=2
 ntc=54000,-10.0
 ntc=36185,20.8

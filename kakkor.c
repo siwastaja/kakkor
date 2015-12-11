@@ -260,11 +260,11 @@ void log_measurement(measurement_t* m, test_t* t, int time)
 void print_measurement(measurement_t* m, int time)
 {
 	if(m->resistance != 0.0)
-		printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f                           R measured = %.2f\n",
+		printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f                           R measured = %.2f",
 			time, short_mode_names[m->mode], short_cccv_names[m->cccv],
 			m->voltage, m->current, m->temperature, m->cumul_ah, m->cumul_wh, m->resistance*1000.0);
 	else
-		printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f\n",
+		printf("time=%u %s %s V=%.3f I=%.2f T=%.1f Ah=%.4f Wh=%.3f",
 			time, short_mode_names[m->mode], short_cccv_names[m->cccv],
 			m->voltage, m->current, m->temperature, m->cumul_ah, m->cumul_wh);
 
@@ -280,7 +280,7 @@ void print_measurement(measurement_t* m, int time)
 
 int set_channel_mode(test_t* test, int channel, mode_t mode)
 {
-	usleep(5000);
+	usleep(1000);
 	if(mode != MODE_OFF && mode != MODE_CHARGE && mode != MODE_DISCHARGE)
 	{
 		printf("Error: invalid mode requested (%d)!\n", mode);
@@ -293,6 +293,21 @@ int set_channel_mode(test_t* test, int channel, mode_t mode)
 	}
 
 	char txbuf[32];
+
+	// First do an "OFF" to zero the watchdog. TODO: fix the watchdog in HW (to zero on CHA/DSCH commands)
+/*	if(mode == MODE_CHARGE || mode == MODE_DISCHARGE)
+	{
+		sprintf(txbuf, "@%u:OFF;", channel);
+
+		if(comm_autoretry(test->fd, txbuf, "OFF OK", NULL))
+		{
+			printf("Emergency: failed to set channel %d to mode %s!\n", channel, mode_names[mode]);
+			return -1;
+		}
+		usleep(2000);
+	}
+*/
+
 	sprintf(txbuf, "@%u:%s;", channel, mode_commands[mode]);
 	char expect[32];
 	sprintf(expect, "%s OK", mode_commands[mode]);
@@ -303,6 +318,15 @@ int set_channel_mode(test_t* test, int channel, mode_t mode)
 		return -1;
 	}
 
+/*	sprintf(txbuf, "@%u:WDGON;", channel);
+	usleep(1000);
+
+	if(comm_autoretry(test->fd, txbuf, "WDGON OK", NULL))
+	{
+		printf("Emergency: failed to set channel %d to mode %s!\n", channel, mode_names[mode]);
+		return -1;
+	}
+*/
 	return 0;
 }
 
@@ -312,7 +336,7 @@ int set_test_mode(test_t* test, mode_t mode)
 	int fail = 0;
 	for(i = 0; i < test->num_channels; i++)
 	{
-		usleep(5000);
+//		usleep(1000);
 //		printf("INFO: Setting channel %d to mode %d\n", test->channels[i], mode);
 		if(set_channel_mode(test, test->channels[i], mode))
 		{
@@ -673,21 +697,21 @@ int configure_hw(test_t* params, mode_t mode)
 			extra_vcv *= -1;
 		}
 
-		printf("Info: configuring channel %u\n", params->channels[i]);
+		printf("Info: configuring channel %3u: ", params->channels[i]); fflush(stdout);
 		sprintf(buf, "@%u:OFF;", params->channels[i]);
 		fprintf(params->verbose_log, "    %s", buf);
 		if(comm_autoretry(params->fd, buf, "OFF OK", NULL))
 			return -1;
 
-		usleep(5000);
+		usleep(1000);
 
 		sprintf(buf, "@%u:SETI %d;", params->channels[i], settings->current);
-		printf("      %s", buf); fflush(stdout);
+		printf("%s", buf); fflush(stdout);
 		fprintf(params->verbose_log, "    %s", buf);
 		if(comm_autoretry(params->fd, buf, "SETI OK", NULL))
 			return -1;
 
-		usleep(5000);
+		usleep(1000);
 
 		sprintf(buf, "@%u:SETV %d;", params->channels[i], settings->voltage+extra_vcv);
 		printf("      %s", buf); fflush(stdout);
@@ -695,7 +719,7 @@ int configure_hw(test_t* params, mode_t mode)
 		if(comm_autoretry(params->fd, buf, "SETV OK", NULL))
 			return -1;
 
-		usleep(5000);
+		usleep(1000);
 
 		sprintf(buf, "@%u:SETISTOP %d;", params->channels[i], settings->stop_current);
 		printf("      %s", buf); fflush(stdout);
@@ -703,7 +727,7 @@ int configure_hw(test_t* params, mode_t mode)
 		if(comm_autoretry(params->fd, buf, "SETISTOP OK", NULL))
 			return -1;
 
-		usleep(5000);
+		usleep(1000);
 
 		sprintf(buf, "@%u:SETVSTOP %d;", params->channels[i], settings->stop_voltage+extra_vstop);
 		printf("      %s\n", buf);
@@ -711,7 +735,7 @@ int configure_hw(test_t* params, mode_t mode)
 		if(comm_autoretry(params->fd, buf, "SETVSTOP OK", NULL))
 			return -1;
 
-		usleep(5000);
+		usleep(1000);
 
 	}
 
@@ -1267,6 +1291,7 @@ int start_charge(test_t* test)
 
 void update_test(test_t* test, int cur_time)
 {
+
 	if(test->kludgimus_maximus)
 	{
 //		printf("Warning: kludge in use. todo: fix HW not to give false CV information (set_current() -> also set i_override\n");
@@ -1311,6 +1336,11 @@ void update_test(test_t* test, int cur_time)
 			test->cycle_cnt++;
 		}
 		set_test_mode(test, MODE_OFF);
+	}
+
+	if(test->cooldown_start_time == -999999)
+	{
+		test->cooldown_start_time = cur_time+5 - ((test->next_mode==MODE_CHARGE)?(test->postdischarge_cooldown):(test->postcharge_cooldown));
 	}
 
 
@@ -1410,7 +1440,6 @@ void update_test(test_t* test, int cur_time)
 
 	printf("test=%s cycle=%u ", test->name, test->cycle_cnt);
 	print_measurement(&test->cur_meas, cur_time - test->cur_meas.start_time);
-	printf("\n");
 	log_measurement(&test->cur_meas, test, cur_time - test->cur_meas.start_time);
 
 	clear_hw_measurements(test);
@@ -1418,7 +1447,7 @@ void update_test(test_t* test, int cur_time)
 
 	if(test->cur_mode == MODE_OFF && test->next_mode == MODE_DISCHARGE)
 	{
-		printf("Info: Starting discharge in %d seconds...    \r", test->cooldown_start_time + test->postcharge_cooldown - cur_time); fflush(stdout);
+		printf("     Starting discharge in %d seconds...", test->cooldown_start_time + test->postcharge_cooldown - cur_time);
 		if(cur_time >= test->cooldown_start_time + test->postcharge_cooldown)
 		{
 			printf("\n");
@@ -1430,12 +1459,12 @@ void update_test(test_t* test, int cur_time)
 			{
 				go_fatal(test->fd, "start_discharge failed");
 			}
-			sleep(1);
+			usleep(1000);
 		}
 	}
 	else if(test->cur_mode == MODE_OFF && test->next_mode == MODE_CHARGE)
 	{
-		printf("Info: Starting charge in %d seconds...    \r", test->cooldown_start_time + test->postdischarge_cooldown - cur_time); fflush(stdout);
+		printf("    Starting charge in %d seconds...", test->cooldown_start_time + test->postdischarge_cooldown - cur_time);
 		if(cur_time >= test->cooldown_start_time + test->postdischarge_cooldown)
 		{
 			printf("\n");
@@ -1447,9 +1476,12 @@ void update_test(test_t* test, int cur_time)
 			{
 				go_fatal(test->fd, "start_charge failed");
 			}
-			sleep(1);
+			usleep(1000);
 		}
 	}
+
+	printf("\n\n");
+
 }
 
 int prepare_test(test_t* test)
