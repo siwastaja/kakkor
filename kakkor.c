@@ -7,6 +7,8 @@
 
 #include "comm_uart.h"
 
+#define RESISTANCE_COMP_KLUDGE 0.001
+
 typedef enum {MODE_UNDEFINED = 0, MODE_OFF, MODE_CHARGE, MODE_DISCHARGE} mode_t;
 
 const char* mode_names[4] = {"MODE_UNDEFINED", "MODE_OFF", "MODE_CHARGE", "MODE_DISCHARGE"};
@@ -135,6 +137,7 @@ typedef struct
 
 int num_t_cal_points;
 double t_cal[MAX_T_CAL_POINTS][2];
+int defaults_parsed_once = 0;
 
 double ntc_to_c(double ntc)
 {
@@ -147,7 +150,10 @@ double ntc_to_c(double ntc)
 		return -999.0;
 
 	if(ntc < t_cal[num_t_cal_points-1][0])
+	{
+//		printf("KAKKEN KAKKEN KAKKEN                        INPUT VALUE = %f    (%d, %f)\n", ntc, num_t_cal_points-1, t_cal[num_t_cal_points-1][0]);
 		return 999.0;
+	}
 
 
 	// interpolate:
@@ -1141,12 +1147,12 @@ int parse_token(char* token, test_t* params)
 		if(ctmp == 'm' || ctmp == 'M')
 			itmp *= 60;
 
-		if(itmp < 6 || itmp > 60)
+		if(itmp < 6 || itmp > 30)
 			printf("Warning: ignored out-of-range resistancepulse (%u)\n", itmp);
 		else
 		{
-			params->resistance_first_pulse_len = 3;
-			params->resistance_second_pulse_len = itmp-3;
+			params->resistance_first_pulse_len = 2;
+			params->resistance_second_pulse_len = itmp-2;
 		}
 	}
 	else if(sscanf(token, "resistancecurrent=%lf", &ftmp) == 1)
@@ -1158,7 +1164,7 @@ int parse_token(char* token, test_t* params)
 		else
 		{
 			params->resistance_second_pulse_current_mul = ftmp;
-			params->resistance_first_pulse_current_mul = ftmp * 0.85;
+			params->resistance_first_pulse_current_mul = ftmp * 0.75;
 		}
 	}
 	else if(sscanf(token, "resistancecycle=%u", &itmp) == 1)
@@ -1172,21 +1178,26 @@ int parse_token(char* token, test_t* params)
 	}
 	else if(sscanf(token, "ntc=%lf,%lf", &ftmp, &ftmp2) == 2)
 	{
-		if(ftmp < 10 || ftmp > 65530.0 || ftmp2 < -100.0 || ftmp2 > 200.0)
+
+		if(!defaults_parsed_once)
 		{
-			printf("Warning: ignoring out-of-range ntc calibration pair (%f,%f)\n", ftmp, ftmp2);
-		}
-		else
-		{
-			if(num_t_cal_points >= MAX_T_CAL_POINTS-1)
+			if(ftmp < 10 || ftmp > 65530.0 || ftmp2 < -100.0 || ftmp2 > 200.0)
 			{
-				printf("Warning: ignoring excess NTC calibration pair (%f, %f), max %u points allowed\n", ftmp, ftmp2, MAX_T_CAL_POINTS);
+				printf("Warning: ignoring out-of-range ntc calibration pair (%f,%f)\n", ftmp, ftmp2);
 			}
 			else
 			{
-				t_cal[num_t_cal_points][0] = ftmp;
-				t_cal[num_t_cal_points][1] = ftmp2;
-				num_t_cal_points++;
+				if(num_t_cal_points >= MAX_T_CAL_POINTS-1)
+				{
+					printf("Warning: ignoring excess NTC calibration pair (%f, %f), max %u points allowed\n", ftmp, ftmp2, MAX_T_CAL_POINTS);
+				}
+				else
+				{
+//					printf("KAKKEN                                              added t_cal_point %f  %f,  %d\n", ftmp, ftmp2, num_t_cal_points);
+					t_cal[num_t_cal_points][0] = ftmp;
+					t_cal[num_t_cal_points][1] = ftmp2;
+					num_t_cal_points++;
+				}
 			}
 		}
 	}
@@ -1354,7 +1365,7 @@ void update_test(test_t* test, int cur_time)
 				{
 					fprintf(test->verbose_log, "DBG: V now: %f, last V: %f, dI: %f\n", test->cur_meas.voltage, test->resistance_last_v,
 						(test->charge.current * (test->resistance_base_current_mul - test->resistance_second_pulse_current_mul)));
-					test->cur_meas.resistance = (test->resistance_last_v - test->cur_meas.voltage) /
+					test->cur_meas.resistance = (test->resistance_last_v - test->cur_meas.voltage + RESISTANCE_COMP_KLUDGE) /
 						(test->charge.current * (test->resistance_base_current_mul - test->resistance_second_pulse_current_mul));
 
 					test_set_current(test, test->charge.current * test->resistance_base_current_mul);
@@ -1525,6 +1536,7 @@ int main(int argc, char** argv)
 			free(tests);
 			return 1;
 		}
+		defaults_parsed_once = 1;
 		if(parse_test_file(argv[t+1], &tests[t]))
 		{
 			free(tests);

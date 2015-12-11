@@ -4,7 +4,7 @@ startcycle=0
 temperaturestop>72.0
 resistance=charge
 resistanceinterval=120s
-resistancepulse=7s
+resistancepulse=8s
 resistancecurrent=0.70
 resistancecycle=2
 ntc=54000,-10.0
@@ -19,4 +19,3 @@ ntc=16290,55.1
 ntc=14200,60.3
 ntc=12283,66.0
 ntc=6500,86.0
-
