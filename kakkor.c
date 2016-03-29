@@ -3,6 +3,7 @@
 #include <malloc.h>
 #include <time.h>
 #include <unistd.h>
+#include <inttypes.h>
 //#include <ncurses.h>
 
 #include "comm_uart.h"
@@ -117,6 +118,7 @@ typedef struct
 	mode_t next_mode;
 	FILE* log;
 	FILE* verbose_log;
+	FILE* summary_log;
 
 	int resistance_on;
 	int resistance_on_discharge_too;
@@ -131,6 +133,10 @@ typedef struct
 	double resistance_last_v;
 	int kludgimus_maximus;
 	int resistance_every_cycle;
+
+	double voltage_avg_acc;
+	double current_avg_acc;
+	double temperature_avg_acc;
 
 } test_t;
 
@@ -215,6 +221,7 @@ int start_log(test_t* t)
 	{
 		t->log = NULL;
 		t->verbose_log = NULL;
+		t->summary_log = NULL;
 		printf("Invalid test name, cannot open log files\n");
 		return -1;
 	}
@@ -227,6 +234,9 @@ int start_log(test_t* t)
 	sprintf(buf, "%s_verbose.log", t->name);
 	t->verbose_log = fopen(buf, "a");
 
+	sprintf(buf, "%s_summary.log", t->name);
+	t->summary_log = fopen(buf, "a");
+
 	fprintf(t->log, "cycle%stime%smode%scc/cv%svoltage%scurrent%stemperature%scumul.Ah%scumul.Wh%sDCresistance\n",
 		delim,delim,delim,delim,delim,delim,delim,delim,delim);
 
@@ -235,7 +245,15 @@ int start_log(test_t* t)
 
 	fflush(t->log);
 	fflush(t->verbose_log);
+	fflush(t->summary_log);
 	return 0;
+}
+
+void log_summary(measurement_t* m, test_t* t, int time)
+{
+	fprintf(t->summary_log, "%u%s%u%s%.3f%s%.3f%s%.1f%s%.1f%s%.3f%s%.3f\n",
+		t->cycle_cnt, delim, time, delim,
+		t->voltage_avg_acc/((double)time), delim, t->current_avg_acc/((double)time), delim, t->temperature_avg_acc/((double)time), delim, m->temperature, delim, m->cumul_ah, delim, m->cumul_wh);
 }
 
 void log_measurement(measurement_t* m, test_t* t, int time)
@@ -396,6 +414,8 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 {
 	char* p_val;
 
+	int64_t chk = 0;
+
 //	now checked using comm_autoretry():
 //	if(strstr(str, "MEAS") != str)
 //		return -1;
@@ -429,6 +449,8 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 //		printf("dbg: %u\n", meas->voltage);
 	}
 
+	chk+=meas->voltage;
+
 	if((p_val = strstr(str, "I=")))
 	{
 		if(sscanf(p_val, "I=%d", &meas->current) != 1)
@@ -436,6 +458,7 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 		if(meas->current < HW_MIN_CURRENT || meas->current > HW_MAX_CURRENT)
 			return -7;
 	}
+	chk+=meas->current;
 
 	if((p_val = strstr(str, "T=")))
 	{
@@ -444,6 +467,16 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 		if(meas->temperature < HW_MIN_TEMPERATURE || meas->temperature > HW_MAX_TEMPERATURE)
 			return -9;
 	}
+	chk+=meas->temperature;
+
+
+	uint32_t vdir;
+	if((p_val = strstr(str, "Vdir=")))
+	{
+		if(sscanf(p_val, "Vdir=%u", &vdir) != 1)
+			vdir=0;
+	}
+	chk+=vdir;
 
 	if((p_val = strstr(str, "Iset=")))
 	{
@@ -452,6 +485,24 @@ int parse_hw_measurement(hw_measurement_t* meas, char* str)
 		if(meas->current_setpoint < HW_MIN_CURRENT || meas->current_setpoint > HW_MAX_CURRENT)
 			return -11;
 	}
+	chk+=meas->current_setpoint;
+
+	uint32_t chk_orig;
+	if((p_val = strstr(str, "chk=")))
+	{
+		if(sscanf(p_val, "chk=%u", &chk_orig) != 1)
+			return -12;
+	}
+
+	if(chk > 65535) chk-=65536;
+	if(chk > 65535) chk-=65536;
+	if(chk < 0) chk+=65536;
+
+	if((uint32_t)chk != chk_orig)
+	{
+		return -13;
+	}
+
 
 	return 0;
 }
@@ -1298,7 +1349,10 @@ void update_test(test_t* test, int cur_time)
 	}
 	if(measure_hw(test, test->kludgimus_maximus) < 0)
 	{
-		go_fatal(test->fd, "measure_hw failed");
+		fprintf(test->verbose_log, "measure_hw failed, one retry before going fatal!\n");
+		printf("measure_hw failed, one retry before going fatal!\n");
+		if(measure_hw(test, test->kludgimus_maximus) < 0)
+			go_fatal(test->fd, "measure_hw failed");
 	}
 
 	if(test->kludgimus_maximus) test->kludgimus_maximus--;
@@ -1321,6 +1375,11 @@ void update_test(test_t* test, int cur_time)
 		test->next_mode = MODE_OFF;
 	}
 
+	if(test->cur_mode == MODE_DISCHARGE)
+	{
+
+	}
+
 	if(test->cur_meas.mode == MODE_OFF && test->cur_mode != MODE_OFF)
 	{
 		printf("Info: Cycle ended, setting test off.\n");
@@ -1331,6 +1390,7 @@ void update_test(test_t* test, int cur_time)
 		}
 		else if(test->cur_mode == MODE_DISCHARGE)
 		{
+			log_summary(&test->cur_meas, test, cur_time - test->cur_meas.start_time);
 			test->cooldown_start_time = cur_time;
 			test->next_mode = MODE_CHARGE;
 			test->cycle_cnt++;
